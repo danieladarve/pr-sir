@@ -60,6 +60,15 @@ const prompt = (pr) => {
   return `${md}\n\nReview PR ${pr} now. Return the JSON from section 6 and nothing else.`
 }
 
+// The picked model becomes a spawn argument. Anything not on this list is
+// refused, so a crafted value cannot smuggle in another flag.
+const MODELS = [
+  { id: '', name: 'Default', note: 'whatever your claude config uses' },
+  { id: 'opus', name: 'Opus', note: 'most capable, most expensive' },
+  { id: 'sonnet', name: 'Sonnet', note: 'faster and cheaper' },
+  { id: 'haiku', name: 'Haiku', note: 'cheapest, for small diffs' },
+]
+
 const FINDINGS_SCHEMA = {
   type: 'object',
   required: ['verdict', 'summary', 'findings'],
@@ -96,7 +105,7 @@ db.exec(`create table if not exists reviews (
 
 db.exec('create table if not exists repos (name text primary key, path text not null, nwo text)')
 
-for (const col of ['pr_created_at integer', "comments text not null default '[]'"]) {
+for (const col of ['pr_created_at integer', "comments text not null default '[]'", 'model text']) {
   try {
     db.exec(`alter table reviews add column ${col}`)
   } catch {
@@ -268,14 +277,17 @@ async function stageReview(repoName, pr) {
   return get(id)
 }
 
-async function startReview(id) {
+async function startReview(id, model = '') {
   const row = get(id)
   if (!row) throw Object.assign(new Error('unknown review'), { status: 404 })
   if (row.status !== 'staged') throw Object.assign(new Error(`already ${row.status}`), { status: 409 })
   const repo = getRepo(row.repo)
   if (!repo) throw Object.assign(new Error(`unknown repo ${row.repo}`), { status: 400 })
+  if (!MODELS.some((m) => m.id === model)) {
+    throw Object.assign(new Error(`${model} is not a model you can pick`), { status: 400 })
+  }
 
-  update(id, { status: 'running' })
+  update(id, { status: 'running', model: model || null })
 
   const proc = spawn(
     'claude',
@@ -299,6 +311,8 @@ async function startReview(id) {
       // something can still write to the checkout or reach the network.
       '--disallowedTools',
       'Edit Write NotebookEdit Bash(gh pr review:*) Bash(gh api:*) Bash(gh pr comment:*) Bash(gh pr merge:*)',
+      // empty means no flag at all, which leaves the choice to claude's own config
+      ...(model ? ['--model', model] : []),
     ],
     // detached puts it in its own process group, so stop() can take the whole
     // tree down rather than just claude, leaving a wedged grandchild running.
@@ -481,6 +495,8 @@ createServer(async (req, res) => {
   try {
     if (seg[0] !== 'api') return json(res, 404, { error: 'not found' })
 
+    if (req.method === 'GET' && seg[1] === 'models') return json(res, 200, MODELS)
+
     if (req.method === 'GET' && seg[1] === 'repos') return json(res, 200, allRepos())
 
     if (req.method === 'POST' && seg[1] === 'repos') {
@@ -552,7 +568,8 @@ createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && seg[3] === 'start') {
-      return json(res, 200, await startReview(seg[2]))
+      const { model } = await readBody(req)
+      return json(res, 200, await startReview(seg[2], model ?? ''))
     }
 
     if (req.method === 'GET' && seg[3] === 'diff') {

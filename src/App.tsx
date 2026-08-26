@@ -110,8 +110,8 @@ export default function App() {
     <div className="mx-auto max-w-3xl space-y-6 p-6">
       <header className="flex items-start justify-between gap-3">
         <div className="space-y-1">
-          <h1 className="flex items-center gap-2 text-xl font-semibold">
-            <Alien className="size-6 text-primary" />
+          <h1 className="flex items-end leading-4 gap-2 text-xl font-semibold">
+            <Alien className="size-15 text-primary" />
             PR Sir
           </h1>
           <p className="text-sm text-muted-foreground">
