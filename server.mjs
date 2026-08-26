@@ -10,7 +10,7 @@ import { ndjson } from './ndjson.mjs'
 import { reviewPayload } from './payload.mjs'
 
 const run = promisify(execFile)
-const PORT = 8787
+const PORT = Number(process.env.PR_SIR_PORT) || 8787
 // A review can wedge on a command that never returns. Seen in practice: the agent
 // started supervisord in the foreground inside a container to check a base image.
 // Idle, not total, so a slow review is left alone and only a silent one is killed.
@@ -55,8 +55,12 @@ function onPath(cmd) {
 // project is not on its path and /pr-sir does not resolve. Send the skill body
 // as the prompt instead. Read per spawn, so editing SKILL.md takes effect
 // without a restart.
+const skillPrompt = () => readFileSync(SKILL_MD, 'utf8').replace(/^---\n[\s\S]*?\n---\n/, '')
+
+// SKILL.md is the starting point, not the last word: a prompt saved in settings
+// wins, and clearing it falls back to the file again.
 const prompt = (pr) => {
-  const md = readFileSync(SKILL_MD, 'utf8').replace(/^---\n[\s\S]*?\n---\n/, '')
+  const md = setting('prompt') ?? skillPrompt()
   return `${md}\n\nReview PR ${pr} now. Return the JSON from section 6 and nothing else.`
 }
 
@@ -64,7 +68,8 @@ const prompt = (pr) => {
 // refused, so a crafted value cannot smuggle in another flag.
 const MODELS = [
   { id: '', name: 'Default', note: 'whatever your claude config uses' },
-  { id: 'opus', name: 'Opus', note: 'most capable, most expensive' },
+  { id: 'fable', name: 'Fable', note: 'most capable, most expensive' },
+  { id: 'opus', name: 'Opus', note: 'very capable, expensive' },
   { id: 'sonnet', name: 'Sonnet', note: 'faster and cheaper' },
   { id: 'haiku', name: 'Haiku', note: 'cheapest, for small diffs' },
 ]
@@ -104,6 +109,14 @@ db.exec(`create table if not exists reviews (
 )`)
 
 db.exec('create table if not exists repos (name text primary key, path text not null, nwo text)')
+
+db.exec('create table if not exists settings (key text primary key, value text not null)')
+
+const setting = (key) => db.prepare('select value from settings where key = ?').get(key)?.value
+const setSetting = (key, value) =>
+  value
+    ? db.prepare('insert or replace into settings (key, value) values (?, ?)').run(key, value)
+    : db.prepare('delete from settings where key = ?').run(key)
 
 for (const col of ['pr_created_at integer', "comments text not null default '[]'", 'model text']) {
   try {
@@ -497,6 +510,20 @@ createServer(async (req, res) => {
 
     if (req.method === 'GET' && seg[1] === 'models') return json(res, 200, MODELS)
 
+    if (req.method === 'GET' && seg[1] === 'settings') {
+      return json(res, 200, { prompt: setting('prompt') ?? skillPrompt(), model: setting('model') ?? '' })
+    }
+
+    if (req.method === 'POST' && seg[1] === 'settings') {
+      const body = await readBody(req)
+      const model = String(body.model ?? '')
+      if (!MODELS.some((m) => m.id === model)) return json(res, 400, { error: `${model} is not a model you can pick` })
+      // An empty prompt is a reset, not a review with no instructions.
+      setSetting('prompt', String(body.prompt ?? '').trim())
+      setSetting('model', model)
+      return json(res, 200, { prompt: setting('prompt') ?? skillPrompt(), model })
+    }
+
     if (req.method === 'GET' && seg[1] === 'repos') return json(res, 200, allRepos())
 
     if (req.method === 'POST' && seg[1] === 'repos') {
@@ -569,7 +596,7 @@ createServer(async (req, res) => {
 
     if (req.method === 'POST' && seg[3] === 'start') {
       const { model } = await readBody(req)
-      return json(res, 200, await startReview(seg[2], model ?? ''))
+      return json(res, 200, await startReview(seg[2], model ?? setting('model') ?? ''))
     }
 
     if (req.method === 'GET' && seg[3] === 'diff') {

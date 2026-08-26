@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { MoonIcon, SunIcon } from 'lucide-react'
+import { MoonIcon, SettingsIcon, SunIcon } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { toast } from 'sonner'
 import { api, type Repo, type Review, type Session, type StreamEvent } from '@/lib/api'
 import { Archive } from '@/components/Archive'
 import { Alien, FlyingSaucer } from '@/components/icons'
+import { Preferences } from '@/components/Preferences'
 import { Repos } from '@/components/Repos'
 import { Toaster } from '@/components/ui/sonner'
 import { SessionCard } from '@/components/SessionCard'
@@ -20,6 +21,9 @@ export default function App() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [archive, setArchive] = useState<Review[]>([])
   const [busy, setBusy] = useState(false)
+  const [prefs, setPrefs] = useState(false)
+  // Bumped on save so the staged cards pick up the new default model.
+  const [settingsAt, setSettingsAt] = useState(0)
   const input = useRef<HTMLInputElement>(null)
   const { resolvedTheme, setTheme } = useTheme()
   const dark = resolvedTheme !== 'light'
@@ -118,15 +122,32 @@ export default function App() {
             Queue reviews, watch them run, decide what gets posted.
           </p>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
-          onClick={() => setTheme(dark ? 'light' : 'dark')}
-        >
-          {dark ? <SunIcon className="size-4" /> : <MoonIcon className="size-4" />}
-        </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Preferences"
+            aria-pressed={prefs}
+            onClick={() => setPrefs((p) => !p)}
+          >
+            <SettingsIcon className="size-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+            onClick={() => setTheme(dark ? 'light' : 'dark')}
+          >
+            {dark ? <SunIcon className="size-4" /> : <MoonIcon className="size-4" />}
+          </Button>
+        </div>
       </header>
+
+      {prefs && (
+        <div className="rounded-lg border p-4">
+          <Preferences onSaved={() => setSettingsAt(Date.now())} />
+        </div>
+      )}
 
       <form onSubmit={queue} className="flex gap-2">
         <Select value={repo} onValueChange={setRepo}>
@@ -169,7 +190,7 @@ export default function App() {
             </div>
           )}
           {active.map((s) => (
-            <SessionCard key={s.id} session={s} onUpdate={onUpdate} onSettled={onSettled} />
+            <SessionCard key={`${s.id}:${settingsAt}`} session={s} onUpdate={onUpdate} onSettled={onSettled} />
           ))}
         </TabsContent>
 

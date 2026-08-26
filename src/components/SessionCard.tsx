@@ -80,6 +80,7 @@ export function SessionCard({
             <p className="text-sm text-muted-foreground">
               {session.repo} · {session.author} ·{' '}
               {session.status === 'staged' ? ago(session.pr_created_at) : elapsed(session.created_at)}
+              {session.model ? ` · ${session.model}` : ''}
               {session.cost_usd ? ` · $${session.cost_usd.toFixed(2)}` : ''}
             </p>
           </div>

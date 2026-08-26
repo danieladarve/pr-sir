@@ -4,6 +4,17 @@ export type Repo = {
   nwo?: string | null
 }
 
+export type Model = {
+  id: string
+  name: string
+  note: string
+}
+
+export type Settings = {
+  prompt: string
+  model: string
+}
+
 export type Finding = {
   path: string
   line: number
@@ -35,6 +46,7 @@ export type Review = {
   error?: string | null
   comments?: string | null
   pr_created_at?: number | null
+  model?: string | null
   /** Set when staging found a card for this PR already open. */
   existing?: boolean
   created_at: number
@@ -59,7 +71,18 @@ const json = async (res: Response) => {
   return body
 }
 
+// The list never changes while the server is up, so one fetch covers every card.
+let models: Promise<Model[]> | undefined
+
 export const api = {
+  models: (): Promise<Model[]> => (models ??= fetch('/api/models').then(json)),
+  settings: (): Promise<Settings> => fetch('/api/settings').then(json),
+  saveSettings: (s: Settings): Promise<Settings> =>
+    fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(s),
+    }).then(json),
   repos: (): Promise<Repo[]> => fetch('/api/repos').then(json),
   addRepo: (path: string): Promise<Repo> =>
     fetch('/api/repos', {
@@ -77,7 +100,12 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ repo, pr }),
     }).then(json),
-  start: (id: string): Promise<Review> => fetch(`/api/reviews/${id}/start`, { method: 'POST' }).then(json),
+  start: (id: string, model: string): Promise<Review> =>
+    fetch(`/api/reviews/${id}/start`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model }),
+    }).then(json),
   diff: (id: string): Promise<string> =>
     fetch(`/api/reviews/${id}/diff`).then(async (r) => {
       const text = await r.text()
