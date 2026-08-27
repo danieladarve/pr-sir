@@ -282,3 +282,60 @@ assert.strictEqual(isOutdated('0.1.0', null), false)
 assert.strictEqual(isOutdated('0.1.0', ''), false)
 
 console.log('version ok')
+
+// --- which saved prompt a review runs on -----------------------------------
+
+import { pickPrompt } from './prompt.mjs'
+
+const saved = ['Default', 'Frontend', 'Laravel']
+
+// The review's own pick beats the repo's.
+assert.strictEqual(pickPrompt('Frontend', 'Laravel', saved), 'Frontend')
+// Nothing picked for the review, so the repo decides.
+assert.strictEqual(pickPrompt('', 'Laravel', saved), 'Laravel')
+// Neither, so Default.
+assert.strictEqual(pickPrompt('', '', saved), 'Default')
+assert.strictEqual(pickPrompt('', null, saved), 'Default')
+// A profile deleted since it was picked is skipped, not followed.
+assert.strictEqual(pickPrompt('Gone', 'Laravel', saved), 'Laravel')
+assert.strictEqual(pickPrompt('Gone', 'Also gone', saved), 'Default')
+// Nothing saved at all, so the caller falls back to SKILL.md.
+assert.strictEqual(pickPrompt('Frontend', 'Laravel', []), null)
+
+console.log('prompt ok')
+
+// --- what the log shows while a subagent does the work --------------------
+
+import { toLines } from './src/lib/api.ts'
+
+// A review that works through subagents reports only through these, so dropping
+// them left the log on "waiting for the agent" for minutes at a time.
+assert.deepStrictEqual(
+  toLines({ type: 'system', subtype: 'task_started', description: 'Fetch branches and diff stat' }),
+  [{ text: 'task  Fetch branches and diff stat', tone: 'tool', depth: 1 }],
+)
+assert.deepStrictEqual(
+  toLines({ type: 'system', subtype: 'task_notification', status: 'completed', summary: 'Fetch branches' }),
+  [{ text: 'task completed  Fetch branches', tone: 'meta', depth: 1 }],
+)
+
+// A hook_response carries the whole hook output, so it stays out of the log.
+assert.deepStrictEqual(toLines({ type: 'system', subtype: 'hook_response', output: 'PONYTAIL MODE' }), [])
+assert.deepStrictEqual(toLines({ type: 'system', subtype: 'hook_started' }), [])
+
+// A subtype nobody has taught this about still shows, rather than vanishing.
+assert.deepStrictEqual(toLines({ type: 'system', subtype: 'compact_boundary' }), [
+  { text: 'compact boundary', tone: 'meta', depth: 0 },
+])
+
+// Rate limits only when they are worth saying out loud.
+assert.deepStrictEqual(toLines({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed' } }), [])
+assert.deepStrictEqual(
+  toLines({
+    type: 'rate_limit_event',
+    rate_limit_info: { status: 'allowed_warning', rateLimitType: 'seven_day', utilization: 0.8 },
+  }),
+  [{ text: 'rate limit seven_day at 80%', tone: 'meta', depth: 0 }],
+)
+
+console.log('log lines ok')

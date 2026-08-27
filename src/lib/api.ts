@@ -2,6 +2,16 @@ export type Repo = {
   name: string
   path: string
   nwo?: string | null
+  /** The saved prompt this repo reviews with. Null means Default. */
+  prompt?: string | null
+}
+
+/** One review prompt, under the name it is picked by. */
+export type Prompt = {
+  name: string
+  body: string
+  /** Comes from the server rather than the list you edit, so it is read only. */
+  builtin?: boolean
 }
 
 /** One entry in a fixed list the server offers, like the models or the efforts. */
@@ -12,7 +22,6 @@ export type Option = {
 }
 
 export type Settings = {
-  prompt: string
   model: string
   effort: string
   open_prs: boolean
@@ -99,6 +108,8 @@ export type Review = {
   pr_created_at?: number | null
   model?: string | null
   effort?: string | null
+  /** The saved prompt this review actually ran on. */
+  prompt?: string | null
   tokens?: number | null
   /** Set when staging found a card for this PR already open. */
   existing?: boolean
@@ -114,6 +125,11 @@ export type StreamEvent = {
   parent_tool_use_id?: string | null
   total_cost_usd?: number
   usage?: Record<string, number>
+  /** On task_started and task_notification, which is how subagents report. */
+  description?: string
+  summary?: string
+  status?: string
+  rate_limit_info?: { status?: string; rateLimitType?: string; utilization?: number }
   [k: string]: unknown
 }
 
@@ -147,7 +163,26 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(s),
     }).then(json),
+  skillPrompt: (): Promise<{ body: string }> => fetch('/api/skill-prompt').then(json),
+  // Not cached the way the models are: these change while the app is open.
+  prompts: (): Promise<Prompt[]> => fetch('/api/prompts').then(json),
+  /** Only the ones you can edit, so the built-ins stay out of the editor. */
+  saved: (): Promise<Prompt[]> => api.prompts().then((ps) => ps.filter((p) => !p.builtin)),
+  savePrompt: (name: string, body: string, rename?: string): Promise<Prompt[]> =>
+    fetch('/api/prompts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, body, rename }),
+    }).then(json),
+  deletePrompt: (name: string): Promise<Prompt[]> =>
+    fetch(`/api/prompts/${encodeURIComponent(name)}`, { method: 'DELETE' }).then(json),
   repos: (): Promise<Repo[]> => fetch('/api/repos').then(json),
+  setRepoPrompt: (repo: string, prompt: string): Promise<Repo> =>
+    fetch(`/api/repos/${encodeURIComponent(repo)}/prompt`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    }).then(json),
   addRepo: (path: string): Promise<Repo> =>
     fetch('/api/repos', {
       method: 'POST',
@@ -168,11 +203,11 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ repo, pr }),
     }).then(json),
-  start: (id: string, model: string, effort: string): Promise<Review> =>
+  start: (id: string, model: string, effort: string, prompt: string): Promise<Review> =>
     fetch(`/api/reviews/${id}/start`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model, effort }),
+      body: JSON.stringify({ model, effort, prompt }),
     }).then(json),
   diff: (id: string): Promise<string> => fetch(`/api/reviews/${id}/diff`).then(text),
   comment: (id: string, path: string, line: number, body: string): Promise<Review> =>
@@ -234,10 +269,32 @@ const toolLine = (name: string, input: Record<string, unknown>): string => {
   return arg ? `${name}  ${arg}` : name
 }
 
+/**
+ * Hooks fire before the session even starts and a hook_response carries the
+ * whole hook output, which would bury the review in someone's shell profile.
+ */
+const NOISE = ['hook_started', 'hook_response']
+
 export function toLines(e: StreamEvent): Line[] {
   const depth = e.parent_tool_use_id ? 1 : 0
 
   if (e.type === 'system' && e.subtype === 'init') return [{ text: 'session started', tone: 'meta', depth }]
+
+  // A review that works through subagents, /code-review among them, reports
+  // only through these. Without them the log sits on its placeholder for
+  // minutes while the agent is busy.
+  if (e.type === 'system' && e.subtype === 'task_started') {
+    return [{ text: `task  ${e.description ?? ''}`.trim(), tone: 'tool', depth: 1 }]
+  }
+
+  if (e.type === 'system' && e.subtype === 'task_notification') {
+    return [{ text: `task ${e.status ?? 'update'}  ${e.summary ?? ''}`.trim(), tone: 'meta', depth: 1 }]
+  }
+
+  if (e.type === 'rate_limit_event' && e.rate_limit_info?.status !== 'allowed') {
+    const pct = Math.round((e.rate_limit_info?.utilization ?? 0) * 100)
+    return [{ text: `rate limit ${e.rate_limit_info?.rateLimitType ?? ''} at ${pct}%`, tone: 'meta', depth: 0 }]
+  }
 
   if (e.type === 'assistant') {
     const out: Line[] = []
@@ -258,6 +315,12 @@ export function toLines(e: StreamEvent): Line[] {
 
   // The card carries the running total, so the closing line only marks the end.
   if (e.type === 'result') return [{ text: 'review finished', tone: 'meta', depth: 0 }]
+
+  // Better a dim line naming a subtype nobody has taught this about than a log
+  // that looks stuck while the agent works.
+  if (e.type === 'system' && e.subtype && !NOISE.includes(e.subtype)) {
+    return [{ text: e.subtype.replace(/_/g, ' '), tone: 'meta', depth }]
+  }
 
   return []
 }

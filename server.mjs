@@ -10,6 +10,7 @@ import { addTokens, summarise } from './metrics.mjs'
 import { ndjson } from './ndjson.mjs'
 import { isOutdated } from './version.mjs'
 import { reviewPayload } from './payload.mjs'
+import { pickPrompt } from './prompt.mjs'
 
 const run = promisify(execFile)
 const PORT = Number(process.env.PR_SIR_PORT) || 8787
@@ -59,10 +60,20 @@ function onPath(cmd) {
 // without a restart.
 const skillPrompt = () => readFileSync(SKILL_MD, 'utf8').replace(/^---\n[\s\S]*?\n---\n/, '')
 
-// SKILL.md is the starting point, not the last word: a prompt saved in settings
-// wins, and clearing it falls back to the file again.
-const prompt = (pr) => {
-  const md = setting('prompt') ?? skillPrompt()
+// Claude Code's own review, with none of our instructions in front of it. Not a
+// saved prompt, so it cannot be edited, renamed or deleted.
+const CODE_REVIEW = 'Claude /code-review'
+const CODE_REVIEW_NOTE = `Runs Claude Code's own /code-review on the PR, with no prompt of ours in front of it.
+
+Nothing here to edit. The findings come back in the same shape either way, because the schema is what holds them to it, not the prompt.
+
+Needs a claude that has /code-review. An older one will read the line as plain text and review something else.`
+
+// SKILL.md is the starting point, not the last word: a saved prompt wins, and a
+// review left with none falls back to the file again.
+const prompt = (pr, name) => {
+  if (name === CODE_REVIEW) return `/code-review ${pr}`
+  const md = (name && promptBody(name)) ?? skillPrompt()
   return `${md}\n\nReview PR ${pr} now. Return the JSON from section 6 and nothing else.`
 }
 
@@ -129,6 +140,9 @@ db.exec('create table if not exists repos (name text primary key, path text not 
 
 db.exec('create table if not exists settings (key text primary key, value text not null)')
 
+// The only place a review prompt lives. Named, so a repo can ask for one by name.
+db.exec('create table if not exists prompts (name text primary key, body text not null)')
+
 const setting = (key) => db.prepare('select value from settings where key = ?').get(key)?.value
 const setSetting = (key, value) =>
   value
@@ -143,12 +157,19 @@ for (const col of [
   'started_at integer',
   'finished_at integer',
   'tokens integer',
+  'prompt text',
 ]) {
   try {
     db.exec(`alter table reviews add column ${col}`)
   } catch {
     // already there
   }
+}
+
+try {
+  db.exec('alter table repos add column prompt text')
+} catch {
+  // already there
 }
 
 db.exec("update reviews set status = 'failed', error = 'server restarted' where status = 'running'")
@@ -159,6 +180,22 @@ if (db.prepare('select count(*) as n from repos').get().n === 0 && existsSync(pa
   const ins = db.prepare('insert or ignore into repos (name, path) values (?, ?)')
   for (const r of seed) ins.run(r.name, r.path)
   console.log(`imported ${seed.length} repos from repos.json`)
+}
+
+// The built-in leads the list so it is offered everywhere a saved one is, and
+// carries a flag so the editor can leave it alone.
+const allPrompts = () => [
+  { name: CODE_REVIEW, body: CODE_REVIEW_NOTE, builtin: true },
+  ...db.prepare('select name, body from prompts order by name').all(),
+]
+const promptNames = () => allPrompts().map((p) => p.name)
+const promptBody = (name) => db.prepare('select body from prompts where name = ?').get(name)?.body
+
+// The prompt used to be a single settings row. Move it under a name rather than
+// leaving a second copy behind to drift.
+if (db.prepare('select count(*) as n from prompts').get().n === 0) {
+  db.prepare('insert into prompts (name, body) values (?, ?)').run('Default', setting('prompt') ?? skillPrompt())
+  setSetting('prompt', '')
 }
 
 const allRepos = () => db.prepare('select * from repos order by name').all()
@@ -375,7 +412,7 @@ async function stageReview(repoName, pr) {
   return get(id)
 }
 
-async function startReview(id, model = '', effort = EFFORT_DEFAULT) {
+async function startReview(id, model = '', effort = EFFORT_DEFAULT, picked = '') {
   const row = get(id)
   if (!row) throw Object.assign(new Error('unknown review'), { status: 404 })
   if (row.status !== 'staged') throw Object.assign(new Error(`already ${row.status}`), { status: 409 })
@@ -388,13 +425,23 @@ async function startReview(id, model = '', effort = EFFORT_DEFAULT) {
     throw Object.assign(new Error(`${effort} is not an effort you can pick`), { status: 400 })
   }
 
-  update(id, { status: 'running', model: model || null, effort: effort || null, started_at: Date.now() })
+  // Resolved here rather than at spawn: row was read before the update, so
+  // reading row.prompt back would give the stale null.
+  const promptName = pickPrompt(picked, repo.prompt, promptNames())
+
+  update(id, {
+    status: 'running',
+    model: model || null,
+    effort: effort || null,
+    prompt: promptName,
+    started_at: Date.now(),
+  })
 
   const proc = spawn(
     'claude',
     [
       '-p',
-      prompt(row.pr),
+      prompt(row.pr, promptName),
       '--output-format', 'stream-json',
       '--verbose',
       '--forward-subagent-text',
@@ -610,7 +657,6 @@ createServer(async (req, res) => {
 
     if (req.method === 'GET' && seg[1] === 'settings') {
       return json(res, 200, {
-        prompt: setting('prompt') ?? skillPrompt(),
         model: setting('model') ?? '',
         effort: setting('effort') ?? EFFORT_DEFAULT,
         open_prs: setting('open_prs') === '1',
@@ -625,18 +671,11 @@ createServer(async (req, res) => {
       if (!EFFORTS.some((e) => e.id === effort)) {
         return json(res, 400, { error: `${effort} is not an effort you can pick` })
       }
-      // An empty prompt is a reset, not a review with no instructions.
-      setSetting('prompt', String(body.prompt ?? '').trim())
       setSetting('model', model)
       // Stored either way, so the picker shows what a review will actually run.
       setSetting('effort', effort)
       setSetting('open_prs', body.open_prs ? '1' : '')
-      return json(res, 200, {
-        prompt: setting('prompt') ?? skillPrompt(),
-        model,
-        effort,
-        open_prs: setting('open_prs') === '1',
-      })
+      return json(res, 200, { model, effort, open_prs: setting('open_prs') === '1' })
     }
 
     if (req.method === 'GET' && seg[1] === 'repos' && seg[3] === 'prs' && !seg[4]) {
@@ -660,14 +699,67 @@ createServer(async (req, res) => {
 
     if (req.method === 'GET' && seg[1] === 'repos' && !seg[2]) return json(res, 200, allRepos())
 
-    if (req.method === 'POST' && seg[1] === 'repos') {
+    if (req.method === 'POST' && seg[1] === 'repos' && !seg[2]) {
       const { path: dir } = await readBody(req)
       return json(res, 200, await addRepo(dir))
+    }
+
+    if (req.method === 'POST' && seg[1] === 'repos' && seg[2] && seg[3] === 'prompt') {
+      const name = decodeURIComponent(seg[2])
+      if (!getRepo(name)) return json(res, 400, { error: `unknown repo ${name}` })
+      const body = await readBody(req)
+      const picked = String(body.prompt ?? '').trim()
+      if (picked && !promptNames().includes(picked)) {
+        return json(res, 400, { error: `there is no prompt called ${picked}` })
+      }
+      db.prepare('update repos set prompt = ? where name = ?').run(picked || null, name)
+      return json(res, 200, getRepo(name))
     }
 
     if (req.method === 'DELETE' && seg[1] === 'repos' && seg[2]) {
       db.prepare('delete from repos where name = ?').run(decodeURIComponent(seg[2]))
       return json(res, 200, { ok: true })
+    }
+
+    if (req.method === 'GET' && seg[1] === 'prompts' && !seg[2]) return json(res, 200, allPrompts())
+
+    // The copy shipped in SKILL.md, so a prompt can be put back to it.
+    if (req.method === 'GET' && seg[1] === 'skill-prompt') return json(res, 200, { body: skillPrompt() })
+
+    if (req.method === 'POST' && seg[1] === 'prompts' && !seg[2]) {
+      const body = await readBody(req)
+      const name = String(body.name ?? '').trim()
+      const text = String(body.body ?? '').trim()
+      const rename = String(body.rename ?? '').trim()
+      if (!name) return json(res, 400, { error: 'a prompt needs a name' })
+      if (name === CODE_REVIEW || rename === CODE_REVIEW) {
+        return json(res, 400, { error: `${CODE_REVIEW} is built in, so it cannot be edited` })
+      }
+      if (name.length > 60) return json(res, 400, { error: 'that name is too long' })
+      // Not a review with no instructions.
+      if (!text) return json(res, 400, { error: 'a prompt needs a body' })
+      if (rename && rename !== name) {
+        if (rename === 'Default') return json(res, 400, { error: 'Default is the fallback, so it keeps its name' })
+        if (!promptBody(rename)) return json(res, 400, { error: `there is no prompt called ${rename}` })
+        if (promptBody(name)) return json(res, 409, { error: `${name} is taken` })
+        db.prepare('update prompts set name = ?, body = ? where name = ?').run(name, text, rename)
+        // The name is the key everything else points at, so carry the pointers.
+        db.prepare('update repos set prompt = ? where prompt = ?').run(name, rename)
+        db.prepare('update reviews set prompt = ? where prompt = ?').run(name, rename)
+      } else {
+        db.prepare('insert or replace into prompts (name, body) values (?, ?)').run(name, text)
+      }
+      return json(res, 200, allPrompts())
+    }
+
+    if (req.method === 'DELETE' && seg[1] === 'prompts' && seg[2]) {
+      const name = decodeURIComponent(seg[2])
+      // Default is the end of the fallback chain, so it cannot go.
+      if (name === 'Default') return json(res, 400, { error: 'Default is the fallback, so it stays' })
+      if (name === CODE_REVIEW) return json(res, 400, { error: `${CODE_REVIEW} is built in, so it stays` })
+      db.prepare('delete from prompts where name = ?').run(name)
+      db.prepare('update repos set prompt = null where prompt = ?').run(name)
+      return json(res, 200, allPrompts())
     }
 
     if (req.method === 'GET' && seg[1] === 'sessions') {
@@ -738,11 +830,16 @@ createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && seg[3] === 'start') {
-      const { model, effort } = await readBody(req)
+      const { model, effort, prompt: picked } = await readBody(req)
       return json(
         res,
         200,
-        await startReview(seg[2], model ?? setting('model') ?? '', effort || setting('effort') || EFFORT_DEFAULT),
+        await startReview(
+          seg[2],
+          model ?? setting('model') ?? '',
+          effort || setting('effort') || EFFORT_DEFAULT,
+          String(picked ?? ''),
+        ),
       )
     }
 

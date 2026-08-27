@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { api, parseComments, type Option, type Review, type Session } from '@/lib/api'
 import { DEFAULT, OptionPicker } from '@/components/OptionPicker'
+import { PromptDialog } from '@/components/PromptDialog'
 import { Button } from '@/components/ui/button'
 
 export function StagedPanel({
@@ -18,6 +19,8 @@ export function StagedPanel({
   const [efforts, setEfforts] = useState<Option[]>([])
   const [model, setModel] = useState(DEFAULT)
   const [effort, setEffort] = useState('medium')
+  const [prompt, setPrompt] = useState('Default')
+  const [picking, setPicking] = useState(false)
   const comments = parseComments(session)
 
   useEffect(() => {
@@ -31,12 +34,17 @@ export function StagedPanel({
         setEffort(s.effort)
       })
       .catch(() => {})
-  }, [])
+    // The repo's own prompt, so the button reads right before it is touched.
+    api
+      .repos()
+      .then((rs) => setPrompt(rs.find((r) => r.name === session.repo)?.prompt || 'Default'))
+      .catch(() => {})
+  }, [session.repo])
 
   const start = async () => {
     setBusy(true)
     try {
-      onUpdate(await api.start(session.id, model === DEFAULT ? '' : model, effort))
+      onUpdate(await api.start(session.id, model === DEFAULT ? '' : model, effort, prompt))
     } catch (err) {
       toast.error(String((err as Error).message))
       setBusy(false)
@@ -50,6 +58,17 @@ export function StagedPanel({
       </Button>
       <OptionPicker label="Model" options={models} value={model} onChange={setModel} disabled={busy} />
       <OptionPicker label="Effort" options={efforts} value={effort} onChange={setEffort} disabled={busy} />
+      <Button variant="ghost" onClick={() => setPicking(true)} disabled={busy}>
+        Prompt: {prompt}
+      </Button>
+      {picking && (
+        <PromptDialog
+          onClose={() => setPicking(false)}
+          value={prompt}
+          onPick={setPrompt}
+          pr={session.pr}
+        />
+      )}
       {comments.length > 0 && (
         <Button
           variant="ghost"

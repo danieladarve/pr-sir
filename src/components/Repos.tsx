@@ -1,13 +1,31 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { api, type Repo } from '@/lib/api'
+import { api, type Option, type Repo } from '@/lib/api'
 import { Satellite } from '@/components/icons'
+import { OptionPicker } from '@/components/OptionPicker'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 export function Repos({ repos, onChange }: { repos: Repo[]; onChange: () => void }) {
   const [dir, setDir] = useState('')
   const [busy, setBusy] = useState(false)
+  const [prompts, setPrompts] = useState<Option[]>([])
+
+  useEffect(() => {
+    api
+      .prompts()
+      .then((ps) => setPrompts(ps.map((p) => ({ id: p.name, name: p.name, note: '' }))))
+      .catch(() => setPrompts([]))
+  }, [])
+
+  const setPrompt = async (repo: string, name: string) => {
+    try {
+      await api.setRepoPrompt(repo, name)
+      onChange()
+    } catch (err) {
+      toast.error(String((err as Error).message))
+    }
+  }
 
   const add = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -65,7 +83,16 @@ export function Repos({ repos, onChange }: { repos: Repo[]; onChange: () => void
                 {r.path}
               </div>
             </div>
-            <Button variant="ghost" size="sm" className="ml-auto shrink-0" onClick={() => remove(r.name)}>
+            <div className="ml-auto shrink-0">
+              <OptionPicker
+                label="Prompt"
+                options={prompts}
+                value={r.prompt || 'Default'}
+                onChange={(name) => setPrompt(r.name, name)}
+                disabled={busy || prompts.length === 0}
+              />
+            </div>
+            <Button variant="ghost" size="sm" className="shrink-0" onClick={() => remove(r.name)}>
               Remove
             </Button>
           </div>
