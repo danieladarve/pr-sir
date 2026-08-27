@@ -11,6 +11,7 @@ import { ndjson } from './ndjson.mjs'
 import { isOutdated } from './version.mjs'
 import { reviewPayload } from './payload.mjs'
 import { pickPrompt } from './prompt.mjs'
+import { reviewResult } from './result.mjs'
 
 const run = promisify(execFile)
 const PORT = Number(process.env.PR_SIR_PORT) || 8787
@@ -72,7 +73,9 @@ Needs a claude that has /code-review. An older one will read the line as plain t
 // SKILL.md is the starting point, not the last word: a saved prompt wins, and a
 // review left with none falls back to the file again.
 const prompt = (pr, name) => {
-  if (name === CODE_REVIEW) return `/code-review ${pr}`
+  if (name === CODE_REVIEW) {
+    return `/code-review ${pr}\n\nReport the findings as the JSON in the schema rather than as text.`
+  }
   const md = (name && promptBody(name)) ?? skillPrompt()
   return `${md}\n\nReview PR ${pr} now. Return the JSON from section 6 and nothing else.`
 }
@@ -533,19 +536,7 @@ function onEvent(id, event) {
     finish(id, { status: 'failed', error: String(event.result ?? event.subtype ?? 'review failed').slice(0, 2000) })
     return
   }
-  let parsed
-  try {
-    parsed = JSON.parse(event.result)
-  } catch {
-    finish(id, { status: 'failed', error: 'agent did not return JSON matching the schema' })
-    return
-  }
-  finish(id, {
-    status: 'done',
-    verdict: parsed.verdict,
-    summary: parsed.summary,
-    findings: JSON.stringify(parsed.findings ?? []),
-  })
+  finish(id, reviewResult(event.result))
 }
 
 function finish(id, fields) {

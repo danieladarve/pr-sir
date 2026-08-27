@@ -339,3 +339,39 @@ assert.deepStrictEqual(
 )
 
 console.log('log lines ok')
+
+// --- what a finished run leaves on the card --------------------------------
+
+import { reviewResult } from './result.mjs'
+
+// The shape the app is built on.
+assert.deepStrictEqual(
+  reviewResult('{"verdict":"APPROVE","summary":"reads fine","findings":[]}'),
+  { status: 'done', verdict: 'APPROVE', summary: 'reads fine', findings: '[]' },
+)
+{
+  const f = { path: 'a.php', line: 4, severity: 'bug', body: 'off by one' }
+  const got = reviewResult(JSON.stringify({ verdict: 'REQUEST_CHANGES', summary: 's', findings: [f] }))
+  assert.deepStrictEqual(JSON.parse(got.findings), [f])
+}
+
+// Prose instead of the schema, which is what /code-review writes. The review is
+// kept as the summary rather than thrown away, and nothing is approved on it.
+{
+  const got = reviewResult('Reviewed PR #5918. Findings:\n\n- invoice.blade.php:50 subtracts the wrong delta.')
+  assert.strictEqual(got.status, 'done')
+  assert.strictEqual(got.verdict, 'REQUEST_CHANGES')
+  assert.strictEqual(got.findings, '[]')
+  assert.match(got.summary, /invoice\.blade\.php:50/)
+}
+
+// Valid JSON of the wrong shape goes the same way as prose.
+assert.strictEqual(reviewResult('[1,2,3]').verdict, 'REQUEST_CHANGES')
+assert.strictEqual(reviewResult('{"summary":"no findings key"}').findings, '[]')
+assert.strictEqual(reviewResult('').summary, '')
+assert.strictEqual(reviewResult(undefined).summary, '')
+
+// A very long write-up is cut rather than stored whole.
+assert.strictEqual(reviewResult('x'.repeat(9000)).summary.length, 8000)
+
+console.log('result ok')
