@@ -16,8 +16,9 @@ export function DiffView({
   onComment,
 }: {
   diff: string
-  /** Returns false when the comment did not save, so the box keeps the text. */
-  onComment: (path: string, line: number, body: string) => Promise<boolean>
+  /** Returns false when the comment did not save, so the box keeps the text.
+   *  Left out for a PR with no review behind it, which reads but takes nothing. */
+  onComment?: (path: string, line: number, body: string) => Promise<boolean>
 }) {
   const files = parseDiff(diff)
   // Which line the comment box is open on, as "path:line".
@@ -47,7 +48,7 @@ export function DiffView({
     if (!text.trim()) return
     setBusy(true)
     try {
-      if (!(await onComment(path, line, text))) return // keep what they typed
+      if (!onComment || !(await onComment(path, line, text))) return // keep what they typed
       setOpen(null)
       setText('')
     } finally {
@@ -83,7 +84,7 @@ export function DiffView({
             const key = `${file.path}:${l.newLine}`
             // Only lines that exist in the new file can take a comment. GitHub
             // anchors to the RIGHT side, so a deleted line has nowhere to go.
-            const canComment = l.newLine !== undefined && l.kind !== 'meta'
+            const canComment = onComment !== undefined && l.newLine !== undefined && l.kind !== 'meta'
             return (
               <div key={i}>
                 <div

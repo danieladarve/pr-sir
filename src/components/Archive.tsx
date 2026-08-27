@@ -2,12 +2,16 @@ import { parseFindings, type Review } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 
-export function Archive({ reviews }: { reviews: Review[] }) {
+export function Archive({ reviews, filter }: { reviews: Review[]; filter: string }) {
   const byAuthor = new Map<string, Review[]>()
   for (const r of reviews) byAuthor.set(r.author, [...(byAuthor.get(r.author) ?? []), r])
 
   if (reviews.length === 0) {
-    return <p className="text-sm text-muted-foreground">No reviews posted yet.</p>
+    return (
+      <p className="text-sm text-muted-foreground">
+        {filter.trim() ? `Nothing matching "${filter}".` : 'No reviews posted yet.'}
+      </p>
+    )
   }
 
   return (

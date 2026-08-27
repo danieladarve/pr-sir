@@ -4,7 +4,8 @@ export type Repo = {
   nwo?: string | null
 }
 
-export type Model = {
+/** One entry in a fixed list the server offers, like the models or the efforts. */
+export type Option = {
   id: string
   name: string
   note: string
@@ -13,6 +14,49 @@ export type Model = {
 export type Settings = {
   prompt: string
   model: string
+  effort: string
+  open_prs: boolean
+}
+
+/** One repo or one author, over the range asked for. */
+export type Breakdown = {
+  name: string
+  reviews: number
+  posted: number
+  discarded: number
+  findings: number
+  cost_usd: number
+  tokens: number
+  median_run_ms: number | null
+  median_to_post_ms: number | null
+}
+
+export type Analytics = {
+  days: number
+  totals: {
+    reviews: number
+    posted: number
+    discarded: number
+    findings: number
+    cost_usd: number
+    tokens: number
+    median_run_ms: number | null
+    median_to_post_ms: number | null
+  }
+  series: Array<{ date: string; repos: Record<string, number>; authors: Record<string, number> }>
+  repos: Breakdown[]
+  authors: Breakdown[]
+}
+
+/** An open PR on GitHub, which may or may not have a card here yet. */
+export type OpenPr = {
+  number: number
+  title: string
+  url: string
+  author: string
+  created_at: number | null
+  draft: boolean
+  queued: boolean
 }
 
 export type Finding = {
@@ -47,6 +91,8 @@ export type Review = {
   comments?: string | null
   pr_created_at?: number | null
   model?: string | null
+  effort?: string | null
+  tokens?: number | null
   /** Set when staging found a card for this PR already open. */
   existing?: boolean
   created_at: number
@@ -57,9 +103,10 @@ export type Review = {
 export type StreamEvent = {
   type: string
   subtype?: string
-  message?: { content?: Array<Record<string, unknown>> }
+  message?: { id?: string; content?: Array<Record<string, unknown>>; usage?: Record<string, number> }
   parent_tool_use_id?: string | null
   total_cost_usd?: number
+  usage?: Record<string, number>
   [k: string]: unknown
 }
 
@@ -71,11 +118,20 @@ const json = async (res: Response) => {
   return body
 }
 
-// The list never changes while the server is up, so one fetch covers every card.
-let models: Promise<Model[]> | undefined
+// Neither list changes while the server is up, so one fetch covers every card.
+let models: Promise<Option[]> | undefined
+let efforts: Promise<Option[]> | undefined
+
+const text = async (res: Response) => {
+  const body = await res.text()
+  if (!res.ok) throw new Error(body.slice(0, 300))
+  return body
+}
 
 export const api = {
-  models: (): Promise<Model[]> => (models ??= fetch('/api/models').then(json)),
+  models: (): Promise<Option[]> => (models ??= fetch('/api/models').then(json)),
+  efforts: (): Promise<Option[]> => (efforts ??= fetch('/api/efforts').then(json)),
+  analytics: (days: number): Promise<Analytics> => fetch(`/api/analytics?days=${days}`).then(json),
   settings: (): Promise<Settings> => fetch('/api/settings').then(json),
   saveSettings: (s: Settings): Promise<Settings> =>
     fetch('/api/settings', {
@@ -92,6 +148,10 @@ export const api = {
     }).then(json),
   removeRepo: (name: string) =>
     fetch(`/api/repos/${encodeURIComponent(name)}`, { method: 'DELETE' }).then(json),
+  openPrs: (repo: string): Promise<OpenPr[]> =>
+    fetch(`/api/repos/${encodeURIComponent(repo)}/prs`).then(json),
+  prDiff: (repo: string, pr: number): Promise<string> =>
+    fetch(`/api/repos/${encodeURIComponent(repo)}/prs/${pr}/diff`).then(text),
   sessions: (): Promise<Session[]> => fetch('/api/sessions').then(json),
   archive: (): Promise<Review[]> => fetch('/api/archive').then(json),
   stage: (repo: string, pr: string): Promise<Review> =>
@@ -100,18 +160,13 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ repo, pr }),
     }).then(json),
-  start: (id: string, model: string): Promise<Review> =>
+  start: (id: string, model: string, effort: string): Promise<Review> =>
     fetch(`/api/reviews/${id}/start`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model }),
+      body: JSON.stringify({ model, effort }),
     }).then(json),
-  diff: (id: string): Promise<string> =>
-    fetch(`/api/reviews/${id}/diff`).then(async (r) => {
-      const text = await r.text()
-      if (!r.ok) throw new Error(text.slice(0, 300))
-      return text
-    }),
+  diff: (id: string): Promise<string> => fetch(`/api/reviews/${id}/diff`).then(text),
   comment: (id: string, path: string, line: number, body: string): Promise<Review> =>
     fetch(`/api/reviews/${id}/comments`, {
       method: 'POST',
@@ -136,6 +191,19 @@ const parseList = <T,>(json: string | null | undefined): T[] => {
   } catch {
     return []
   }
+}
+
+export const formatTokens = (n: number) =>
+  n < 1000 ? String(n) : n < 1e6 ? `${(n / 1e3).toFixed(1)}k` : `${(n / 1e6).toFixed(2)}M`
+
+export const formatUsd = (n: number) => (n < 10 ? `$${n.toFixed(2)}` : `$${Math.round(n)}`)
+
+export const formatMs = (ms: number | null) => {
+  if (ms === null) return '–'
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.round(s / 60)
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`
 }
 
 export const parseFindings = (r: Review) => parseList<Finding>(r.findings)
@@ -180,10 +248,8 @@ export function toLines(e: StreamEvent): Line[] {
     return out
   }
 
-  if (e.type === 'result') {
-    const cost = typeof e.total_cost_usd === 'number' ? ` ($${e.total_cost_usd.toFixed(2)})` : ''
-    return [{ text: `review finished${cost}`, tone: 'meta', depth: 0 }]
-  }
+  // The card carries the running total, so the closing line only marks the end.
+  if (e.type === 'result') return [{ text: 'review finished', tone: 'meta', depth: 0 }]
 
   return []
 }

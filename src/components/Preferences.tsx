@@ -1,25 +1,32 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { api, type Model } from '@/lib/api'
+import { api, type Option } from '@/lib/api'
+import { DEFAULT, OptionPicker } from '@/components/OptionPicker'
 import { Button } from '@/components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-
-// The default model is an empty id on the server, which Select cannot hold.
-const DEFAULT = 'default'
+import { Checkbox } from '@/components/ui/checkbox'
 
 export function Preferences({ onSaved }: { onSaved: () => void }) {
-  const [models, setModels] = useState<Model[]>([])
+  const [models, setModels] = useState<Option[]>([])
+  const [efforts, setEfforts] = useState<Option[]>([])
   const [prompt, setPrompt] = useState('')
   const [model, setModel] = useState(DEFAULT)
+  const [effort, setEffort] = useState('medium')
+  const [openPrs, setOpenPrs] = useState(false)
   const [busy, setBusy] = useState(false)
+  // Saving before the fetch lands would write the empty box over the prompt.
+  const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
     api.models().then(setModels).catch(() => setModels([]))
+    api.efforts().then(setEfforts).catch(() => setEfforts([]))
     api
       .settings()
       .then((s) => {
         setPrompt(s.prompt)
         setModel(s.model || DEFAULT)
+        setEffort(s.effort)
+        setOpenPrs(s.open_prs)
+        setLoaded(true)
       })
       .catch((e) => toast.error(String(e.message)))
   }, [])
@@ -27,7 +34,12 @@ export function Preferences({ onSaved }: { onSaved: () => void }) {
   const save = async (next?: string) => {
     setBusy(true)
     try {
-      const saved = await api.saveSettings({ prompt: next ?? prompt, model: model === DEFAULT ? '' : model })
+      const saved = await api.saveSettings({
+        prompt: next ?? prompt,
+        model: model === DEFAULT ? '' : model,
+        effort,
+        open_prs: openPrs,
+      })
       setPrompt(saved.prompt)
       onSaved()
       toast.success('Saved')
@@ -57,26 +69,27 @@ export function Preferences({ onSaved }: { onSaved: () => void }) {
         </p>
       </div>
 
+      <label className="flex items-start gap-3">
+        <Checkbox checked={openPrs} onCheckedChange={(v) => setOpenPrs(v === true)} disabled={busy || !loaded} />
+        <span className="space-y-1">
+          <span className="block text-sm font-medium">Show the repo's open PRs</span>
+          <span className="block text-sm text-muted-foreground">
+            Adds a tab listing everything open on the selected repo, so you can queue a review
+            without typing the number.
+          </span>
+        </span>
+      </label>
+
       <div className="flex flex-wrap items-center gap-2">
-        <Select value={model} onValueChange={setModel} disabled={busy}>
-          <SelectTrigger className="w-44 shrink-0">
-            <SelectValue placeholder="Model" />
-          </SelectTrigger>
-          <SelectContent>
-            {models.map((m) => (
-              <SelectItem key={m.id || DEFAULT} value={m.id || DEFAULT}>
-                {m.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <OptionPicker label="Model" options={models} value={model} onChange={setModel} disabled={busy} />
+        <OptionPicker label="Effort" options={efforts} value={effort} onChange={setEffort} disabled={busy} />
         <span className="text-sm text-muted-foreground">
           {models.find((m) => (m.id || DEFAULT) === model)?.note}
         </span>
-        <Button className="ml-auto" onClick={() => save()} disabled={busy}>
+        <Button className="ml-auto" onClick={() => save()} disabled={busy || !loaded}>
           Save
         </Button>
-        <Button variant="ghost" onClick={() => save('')} disabled={busy}>
+        <Button variant="ghost" onClick={() => save('')} disabled={busy || !loaded}>
           Reset the prompt
         </Button>
       </div>

@@ -6,6 +6,7 @@ import { createServer } from 'node:http'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { promisify } from 'node:util'
+import { addTokens, summarise } from './metrics.mjs'
 import { ndjson } from './ndjson.mjs'
 import { reviewPayload } from './payload.mjs'
 
@@ -74,6 +75,18 @@ const MODELS = [
   { id: 'haiku', name: 'Haiku', note: 'cheapest, for small diffs' },
 ]
 
+// Same deal as the models: a fixed list, so nothing else reaches the spawn.
+// No empty entry here: claude's own default is medium, so this list says so
+// rather than leaving it to config.
+const EFFORT_DEFAULT = 'medium'
+const EFFORTS = [
+  { id: 'low', name: 'Low', note: 'quickest, least thinking' },
+  { id: 'medium', name: 'Medium', note: '' },
+  { id: 'high', name: 'High', note: '' },
+  { id: 'xhigh', name: 'Extra high', note: '' },
+  { id: 'max', name: 'Max', note: 'slowest, most thinking' },
+]
+
 const FINDINGS_SCHEMA = {
   type: 'object',
   required: ['verdict', 'summary', 'findings'],
@@ -100,8 +113,11 @@ const FINDINGS_SCHEMA = {
 
 // --- storage --------------------------------------------------------------
 
-mkdirSync(path.join(root, 'data'), { recursive: true })
-const db = new DatabaseSync(path.join(root, 'data', 'pr-sir.db'))
+// Overridable so a throwaway copy can be pointed at for testing, rather than
+// the database holding your real settings and reviews.
+const DATA = process.env.PR_SIR_DATA || path.join(root, 'data')
+mkdirSync(DATA, { recursive: true })
+const db = new DatabaseSync(path.join(DATA, 'pr-sir.db'))
 db.exec(`create table if not exists reviews (
   id text primary key, repo text, pr integer, title text, author text, url text,
   head_sha text, status text, verdict text, summary text, findings text,
@@ -118,7 +134,15 @@ const setSetting = (key, value) =>
     ? db.prepare('insert or replace into settings (key, value) values (?, ?)').run(key, value)
     : db.prepare('delete from settings where key = ?').run(key)
 
-for (const col of ['pr_created_at integer', "comments text not null default '[]'", 'model text']) {
+for (const col of [
+  'pr_created_at integer',
+  "comments text not null default '[]'",
+  'model text',
+  'effort text',
+  'started_at integer',
+  'finished_at integer',
+  'tokens integer',
+]) {
   try {
     db.exec(`alter table reviews add column ${col}`)
   } catch {
@@ -218,7 +242,7 @@ const push = (id, event) => {
   if (!s) return
   s.events.push(event)
   if (s.events.length > 2000) s.events.shift()
-  broadcast('event', { id, event })
+  broadcast('event', { id, event, tokens: s.tokens })
 }
 
 /** SIGTERM the whole group, then SIGKILL what is left. A review that wedged on
@@ -249,6 +273,44 @@ function armIdle(id) {
     s.timedOut = true
     stop(s.proc)
   }, IDLE_MS)
+}
+
+/** What the finished reviews add up to, by day, by repo and by author. Posted
+ *  and discarded only, so it counts decisions rather than attempts. */
+function analytics(days) {
+  const since = days > 0 ? Date.now() - days * 86_400_000 : 0
+  const rows = db
+    .prepare("select * from reviews where status in ('posted', 'discarded') and created_at >= ?")
+    .all(since)
+  return { days, ...summarise(rows) }
+}
+
+/** Everything open on the repo right now, whether or not it has a card here. */
+async function openPrs(repoName) {
+  const repo = getRepo(repoName)
+  if (!repo) throw Object.assign(new Error(`unknown repo ${repoName}`), { status: 400 })
+  const { stdout } = await run(
+    'gh',
+    ['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,title,url,author,createdAt,isDraft'],
+    { cwd: repo.path },
+  )
+  // A PR already on a card is marked rather than hidden, so the list still
+  // matches what GitHub shows.
+  const staged = new Set(
+    db
+      .prepare("select pr from reviews where repo = ? and status in ('staged', 'running', 'done')")
+      .all(repoName)
+      .map((r) => r.pr),
+  )
+  return JSON.parse(stdout).map((p) => ({
+    number: p.number,
+    title: p.title,
+    url: p.url,
+    author: p.author?.login ?? 'unknown',
+    created_at: Date.parse(p.createdAt) || null,
+    draft: p.isDraft,
+    queued: staged.has(p.number),
+  }))
 }
 
 /** Pulls the PR in and parks it. Nothing is spawned until the user says go. */
@@ -285,12 +347,12 @@ async function stageReview(repoName, pr) {
     pr_created_at: Date.parse(meta.createdAt) || null,
   }
   save(row)
-  sessions.set(id, { events: [], proc: null, cost: 0 })
+  sessions.set(id, { events: [], proc: null, cost: 0, tokens: 0, counted: new Set() })
   broadcast('session', { session: { ...get(id), events: [] } })
   return get(id)
 }
 
-async function startReview(id, model = '') {
+async function startReview(id, model = '', effort = EFFORT_DEFAULT) {
   const row = get(id)
   if (!row) throw Object.assign(new Error('unknown review'), { status: 404 })
   if (row.status !== 'staged') throw Object.assign(new Error(`already ${row.status}`), { status: 409 })
@@ -299,8 +361,11 @@ async function startReview(id, model = '') {
   if (!MODELS.some((m) => m.id === model)) {
     throw Object.assign(new Error(`${model} is not a model you can pick`), { status: 400 })
   }
+  if (!EFFORTS.some((e) => e.id === effort)) {
+    throw Object.assign(new Error(`${effort} is not an effort you can pick`), { status: 400 })
+  }
 
-  update(id, { status: 'running', model: model || null })
+  update(id, { status: 'running', model: model || null, effort: effort || null, started_at: Date.now() })
 
   const proc = spawn(
     'claude',
@@ -326,13 +391,20 @@ async function startReview(id, model = '') {
       'Edit Write NotebookEdit Bash(gh pr review:*) Bash(gh api:*) Bash(gh pr comment:*) Bash(gh pr merge:*)',
       // empty means no flag at all, which leaves the choice to claude's own config
       ...(model ? ['--model', model] : []),
+      ...(effort ? ['--effort', effort] : []),
     ],
     // detached puts it in its own process group, so stop() can take the whole
     // tree down rather than just claude, leaving a wedged grandchild running.
     { cwd: repo.path, detached: true },
   )
 
-  sessions.set(id, { events: sessions.get(id)?.events ?? [], proc, cost: 0 })
+  sessions.set(id, {
+    events: sessions.get(id)?.events ?? [],
+    proc,
+    cost: 0,
+    tokens: 0,
+    counted: new Set(),
+  })
   broadcast('review', { id, review: get(id) })
 
   // Without this a missing or unrunnable claude emits an unhandled 'error' and
@@ -380,6 +452,7 @@ function onEvent(id, event) {
   }
   s.thinking = 0
 
+  addTokens(s, event)
   push(id, event)
 
   if (typeof event.total_cost_usd === 'number') s.cost = event.total_cost_usd
@@ -408,7 +481,7 @@ function onEvent(id, event) {
 function finish(id, fields) {
   const s = sessions.get(id)
   const cost_usd = s?.cost ?? 0
-  update(id, { ...fields, cost_usd })
+  update(id, { ...fields, cost_usd, tokens: s?.tokens ?? 0, finished_at: Date.now() })
   broadcast('review', { id, review: get(id) })
 }
 
@@ -510,21 +583,59 @@ createServer(async (req, res) => {
 
     if (req.method === 'GET' && seg[1] === 'models') return json(res, 200, MODELS)
 
+    if (req.method === 'GET' && seg[1] === 'efforts') return json(res, 200, EFFORTS)
+
     if (req.method === 'GET' && seg[1] === 'settings') {
-      return json(res, 200, { prompt: setting('prompt') ?? skillPrompt(), model: setting('model') ?? '' })
+      return json(res, 200, {
+        prompt: setting('prompt') ?? skillPrompt(),
+        model: setting('model') ?? '',
+        effort: setting('effort') ?? EFFORT_DEFAULT,
+        open_prs: setting('open_prs') === '1',
+      })
     }
 
     if (req.method === 'POST' && seg[1] === 'settings') {
       const body = await readBody(req)
       const model = String(body.model ?? '')
+      const effort = String(body.effort || EFFORT_DEFAULT)
       if (!MODELS.some((m) => m.id === model)) return json(res, 400, { error: `${model} is not a model you can pick` })
+      if (!EFFORTS.some((e) => e.id === effort)) {
+        return json(res, 400, { error: `${effort} is not an effort you can pick` })
+      }
       // An empty prompt is a reset, not a review with no instructions.
       setSetting('prompt', String(body.prompt ?? '').trim())
       setSetting('model', model)
-      return json(res, 200, { prompt: setting('prompt') ?? skillPrompt(), model })
+      // Stored either way, so the picker shows what a review will actually run.
+      setSetting('effort', effort)
+      setSetting('open_prs', body.open_prs ? '1' : '')
+      return json(res, 200, {
+        prompt: setting('prompt') ?? skillPrompt(),
+        model,
+        effort,
+        open_prs: setting('open_prs') === '1',
+      })
     }
 
-    if (req.method === 'GET' && seg[1] === 'repos') return json(res, 200, allRepos())
+    if (req.method === 'GET' && seg[1] === 'repos' && seg[3] === 'prs' && !seg[4]) {
+      return json(res, 200, await openPrs(decodeURIComponent(seg[2])))
+    }
+
+    // The diff of a PR nobody has staged yet, so there is no review row to hang
+    // it off. Read only: comments belong to a review.
+    if (req.method === 'GET' && seg[1] === 'repos' && seg[3] === 'prs' && seg[5] === 'diff') {
+      const repo = getRepo(decodeURIComponent(seg[2]))
+      if (!repo) return json(res, 400, { error: `unknown repo ${seg[2]}` })
+      const n = Number(seg[4])
+      if (!Number.isInteger(n) || n <= 0) return json(res, 400, { error: `"${seg[4]}" is not a PR number` })
+      const { stdout } = await run('gh', ['pr', 'diff', String(n)], {
+        cwd: repo.path,
+        maxBuffer: 32 * 1024 * 1024,
+      })
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
+      return res.end(stdout)
+    }
+
+    if (req.method === 'GET' && seg[1] === 'repos' && !seg[2]) return json(res, 200, allRepos())
 
     if (req.method === 'POST' && seg[1] === 'repos') {
       const { path: dir } = await readBody(req)
@@ -541,7 +652,7 @@ createServer(async (req, res) => {
       const live = [...sessions.entries()]
         .map(([id, s]) => {
           const row = get(id)
-          return row && { ...row, events: s.events, thinking: s.thinking }
+          return row && { ...row, events: s.events, thinking: s.thinking, tokens: s.tokens ?? row.tokens }
         })
         .filter(Boolean)
       // A staged or finished review waiting on a decision lives in memory, so a
@@ -580,6 +691,13 @@ createServer(async (req, res) => {
       return
     }
 
+    if (req.method === 'GET' && seg[1] === 'analytics') {
+      // Absent means the default range. Explicit 0 means everything.
+      const raw = url.searchParams.get('days')
+      const days = Number(raw)
+      return json(res, 200, analytics(raw && Number.isInteger(days) && days >= 0 ? days : 90))
+    }
+
     if (req.method === 'GET' && seg[1] === 'archive') {
       const rows = db
         .prepare("select * from reviews where status in ('posted', 'discarded') order by created_at desc")
@@ -595,8 +713,12 @@ createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && seg[3] === 'start') {
-      const { model } = await readBody(req)
-      return json(res, 200, await startReview(seg[2], model ?? setting('model') ?? ''))
+      const { model, effort } = await readBody(req)
+      return json(
+        res,
+        200,
+        await startReview(seg[2], model ?? setting('model') ?? '', effort || setting('effort') || EFFORT_DEFAULT),
+      )
     }
 
     if (req.method === 'GET' && seg[3] === 'diff') {

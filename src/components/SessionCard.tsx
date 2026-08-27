@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, parseComments, parseFindings, type Review, type Session } from '@/lib/api'
+import { api, formatTokens, parseComments, parseFindings, type Review, type Session } from '@/lib/api'
 import { FindingsPanel } from '@/components/FindingsPanel'
 import { Changes } from '@/components/Changes'
 import { StagedPanel } from '@/components/StagedPanel'
@@ -49,6 +49,7 @@ export function SessionCard({
   onSettled: (r: Review) => void
 }) {
   const [, tick] = useState(0)
+  const tokens = session.tokens ?? 0
 
   const remove = () => {
     // Killing a run in flight, or dropping comments and findings, is worth a
@@ -81,7 +82,8 @@ export function SessionCard({
               {session.repo} · {session.author} ·{' '}
               {session.status === 'staged' ? ago(session.pr_created_at) : elapsed(session.created_at)}
               {session.model ? ` · ${session.model}` : ''}
-              {session.cost_usd ? ` · $${session.cost_usd.toFixed(2)}` : ''}
+              {session.effort ? ` · ${session.effort} effort` : ''}
+              {tokens > 0 ? ` · ${formatTokens(tokens)} tokens` : ''}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">

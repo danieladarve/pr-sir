@@ -188,3 +188,77 @@ const bin = parseDiff('diff --git a/logo.png b/logo.png\nBinary files a/logo.png
 assert.strictEqual(bin[0].lines[0].kind, 'meta')
 
 console.log('diff ok')
+
+// --- what a run costs and what the finished reviews add up to --------------
+
+import { addTokens, median, summarise } from './metrics.mjs'
+
+// One message arrives as several events repeating the same usage. Counting each
+// event would roughly double every number on the card.
+{
+  const state = { tokens: 0, counted: new Set() }
+  const usage = { input_tokens: 10, output_tokens: 4, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000 }
+  const thinking = { type: 'assistant', message: { id: 'msg_1', usage, content: [{ type: 'thinking' }] } }
+  const text = { type: 'assistant', message: { id: 'msg_1', usage, content: [{ type: 'text' }] } }
+  assert.strictEqual(addTokens(state, thinking), 1114)
+  assert.strictEqual(addTokens(state, text), 1114, 'the same message id must not count twice')
+  assert.strictEqual(addTokens(state, { type: 'assistant', message: { id: 'msg_2', usage } }), 2228)
+  // Events with no usage at all, which is most of them.
+  assert.strictEqual(addTokens(state, { type: 'system', subtype: 'init' }), 2228)
+  assert.strictEqual(addTokens(state, { type: 'result' }), 2228)
+}
+
+assert.strictEqual(median([]), null)
+assert.strictEqual(median([5]), 5)
+assert.strictEqual(median([3, 1, 2]), 2)
+assert.strictEqual(median([1, 2, 3, 4]), 3, 'an even count averages the middle pair')
+
+{
+  const at = (iso) => Date.parse(iso)
+  const finding = { path: 'a.php', line: 1, severity: 'bug', body: 'x' }
+  const rows = [
+    { repo: 'api', author: 'ana', status: 'posted', findings: JSON.stringify([finding, finding]),
+      cost_usd: 0.5, tokens: 1000, created_at: at('2026-08-27T01:00:00Z'),
+      started_at: 1000, finished_at: 1000 + 120_000, posted_at: 1000 + 120_000 + 60_000 },
+    { repo: 'api', author: 'bob', status: 'discarded', findings: JSON.stringify([finding, finding, finding]),
+      cost_usd: 0.25, tokens: 500, created_at: at('2026-08-27T02:00:00Z'),
+      started_at: 1000, finished_at: 1000 + 300_000, posted_at: null },
+    // No run timestamps, which is every review from before they were recorded.
+    { repo: 'web', author: 'ana', status: 'posted', findings: '[]',
+      cost_usd: 0.25, tokens: 500, created_at: at('2026-08-26T01:00:00Z'),
+      started_at: null, finished_at: null, posted_at: at('2026-08-26T02:00:00Z') },
+  ]
+  const out = summarise(rows)
+
+  assert.deepStrictEqual(out.totals, {
+    reviews: 3,
+    posted: 2,
+    discarded: 1,
+    // A discarded review's findings never went anywhere, so they do not count.
+    findings: 2,
+    cost_usd: 1,
+    tokens: 2000,
+    median_run_ms: 210_000,
+    // Only the one posted review that has both timestamps.
+    median_to_post_ms: 60_000,
+  })
+
+  // Sorted by review count, and a repo with one review still reports.
+  assert.deepStrictEqual(out.repos.map((r) => [r.name, r.reviews, r.findings]), [
+    ['api', 2, 2],
+    ['web', 1, 0],
+  ])
+  assert.strictEqual(out.repos[1].median_run_ms, null, 'no timestamps means no median, not zero')
+  assert.deepStrictEqual(out.authors.map((a) => [a.name, a.reviews]), [['ana', 2], ['bob', 1]])
+
+  // One entry per day with activity, oldest first, counted both ways.
+  assert.deepStrictEqual(out.series, [
+    { date: '2026-08-26', repos: { web: 1 }, authors: { ana: 1 } },
+    { date: '2026-08-27', repos: { api: 2 }, authors: { ana: 1, bob: 1 } },
+  ])
+
+  assert.deepStrictEqual(summarise([]).totals.reviews, 0)
+  assert.deepStrictEqual(summarise([]).repos, [])
+}
+
+console.log('metrics ok')

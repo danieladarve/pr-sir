@@ -11,6 +11,8 @@ const wanted = {
   Bug: 'bug',
   Bomb: 'bomb',
   Satellite: 'satellite',
+  AlienChart: 'cartoon-alien-mascot-pointing-chart',
+  SettingsScreen: 'cartoon-settings-screen',
 }
 
 const parts = []
