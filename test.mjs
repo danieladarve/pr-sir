@@ -262,3 +262,23 @@ assert.strictEqual(median([1, 2, 3, 4]), 3, 'an even count averages the middle p
 }
 
 console.log('metrics ok')
+
+// --- am I behind the latest release ---------------------------------------
+
+import { isOutdated } from './version.mjs'
+
+assert.strictEqual(isOutdated('0.1.0', '0.2.0'), true)
+assert.strictEqual(isOutdated('0.1.0', '0.1.0'), false)
+assert.strictEqual(isOutdated('0.2.0', '0.1.0'), false, 'ahead of the release is not behind it')
+// The reason this is not a string comparison: '0.9.0' > '0.10.0' alphabetically.
+assert.strictEqual(isOutdated('0.9.0', '0.10.0'), true)
+assert.strictEqual(isOutdated('0.10.0', '0.9.0'), false)
+assert.strictEqual(isOutdated('1.0.0', '10.0.0'), true)
+// The tag carries a v, package.json does not.
+assert.strictEqual(isOutdated('0.1.0', 'v0.2.0'), true)
+assert.strictEqual(isOutdated('0.1.0', 'v0.1.0'), false)
+// No answer from GitHub, no nagging.
+assert.strictEqual(isOutdated('0.1.0', null), false)
+assert.strictEqual(isOutdated('0.1.0', ''), false)
+
+console.log('version ok')

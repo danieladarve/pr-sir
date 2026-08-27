@@ -18,6 +18,13 @@ export type Settings = {
   open_prs: boolean
 }
 
+export type Version = {
+  current: string
+  /** null when GitHub could not be asked. */
+  latest: string | null
+  outdated: boolean
+}
+
 /** One repo or one author, over the range asked for. */
 export type Breakdown = {
   name: string
@@ -131,6 +138,7 @@ const text = async (res: Response) => {
 export const api = {
   models: (): Promise<Option[]> => (models ??= fetch('/api/models').then(json)),
   efforts: (): Promise<Option[]> => (efforts ??= fetch('/api/efforts').then(json)),
+  version: (): Promise<Version> => fetch('/api/version').then(json),
   analytics: (days: number): Promise<Analytics> => fetch(`/api/analytics?days=${days}`).then(json),
   settings: (): Promise<Settings> => fetch('/api/settings').then(json),
   saveSettings: (s: Settings): Promise<Settings> =>

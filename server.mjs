@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { promisify } from 'node:util'
 import { addTokens, summarise } from './metrics.mjs'
 import { ndjson } from './ndjson.mjs'
+import { isOutdated } from './version.mjs'
 import { reviewPayload } from './payload.mjs'
 
 const run = promisify(execFile)
@@ -283,6 +284,28 @@ function analytics(days) {
     .prepare("select * from reviews where status in ('posted', 'discarded') and created_at >= ?")
     .all(since)
   return { days, ...summarise(rows) }
+}
+
+// GitHub is asked once every six hours, not once per page load.
+let versionCache = null
+
+/** What is running here against the newest release of it on GitHub. The repo
+ *  comes from this checkout's own remote, so a fork checks its own releases. */
+async function version() {
+  if (versionCache && Date.now() - versionCache.at < 6 * 3_600_000) return versionCache.data
+  const current = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version
+  let latest = null
+  try {
+    // Fails when there are no releases yet, when gh is not logged in, and when
+    // the machine is offline. None of those are worth an error on screen.
+    const { stdout } = await run('gh', ['release', 'view', '--json', 'tagName', '-q', '.tagName'], { cwd: root })
+    latest = stdout.trim() || null
+  } catch {
+    latest = null
+  }
+  const data = { current, latest, outdated: isOutdated(current, latest) }
+  versionCache = { at: Date.now(), data }
+  return data
 }
 
 /** Everything open on the repo right now, whether or not it has a card here. */
@@ -690,6 +713,8 @@ createServer(async (req, res) => {
       })
       return
     }
+
+    if (req.method === 'GET' && seg[1] === 'version') return json(res, 200, await version())
 
     if (req.method === 'GET' && seg[1] === 'analytics') {
       // Absent means the default range. Explicit 0 means everything.

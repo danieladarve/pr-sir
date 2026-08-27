@@ -46,6 +46,23 @@ export default function App() {
   }, [settingsAt])
 
   useEffect(() => {
+    api
+      .version()
+      .then((v) => {
+        if (!v.outdated) return
+        toast(`PR Sir ${v.latest} is out, you are on ${v.current}.`, {
+          description: 'Pull the latest and restart the server.',
+          // It stays until it is dismissed on purpose: no timeout, and clicking
+          // or swiping it does nothing.
+          duration: Infinity,
+          dismissible: false,
+          action: { label: 'Dismiss', onClick: () => {} },
+        })
+      })
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
     const onHash = () => setHash(window.location.hash)
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
