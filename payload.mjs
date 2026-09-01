@@ -1,7 +1,13 @@
+/** The owner and repo a PR url points at, in the shape gh api wants them. */
+export function ownerRepo(url) {
+  const [, owner, repo] = String(url ?? '').match(/github\.com\/([^/]+)\/([^/]+)\/pull\//) ?? []
+  if (!owner) throw new Error(`cannot read owner/repo from ${url}`)
+  return { owner, repo }
+}
+
 /** Builds the GitHub review payload. Pure, so the money path can be tested. */
 export function reviewPayload(row, findings) {
-  const [, owner, repo] = row.url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\//) ?? []
-  if (!owner) throw new Error(`cannot read owner/repo from ${row.url}`)
+  const { owner, repo } = ownerRepo(row.url)
 
   const comments = findings.map((f) => ({ path: f.path, line: f.line, side: 'RIGHT', body: f.body }))
   const event = comments.length ? 'REQUEST_CHANGES' : 'APPROVE'

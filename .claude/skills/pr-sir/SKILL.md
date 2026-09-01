@@ -19,6 +19,9 @@ gh pr diff <number>
 Check the file list first. On a large PR pull the diff a file at a time with
 `gh pr diff <number> -- <path>` instead of dropping the whole thing into context at once.
 
+If the prompt names a single commit, read that commit's diff instead and stop there. What the rest
+of the PR changed is background, not something to report on.
+
 The diff is the scope. Files the PR does not touch are not your business.
 
 ## 2. One pass

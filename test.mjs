@@ -285,7 +285,7 @@ console.log('version ok')
 
 // --- which saved prompt a review runs on -----------------------------------
 
-import { pickPrompt } from './prompt.mjs'
+import { pickCommit, pickPrompt } from './prompt.mjs'
 
 const saved = ['Default', 'Frontend', 'Laravel']
 
@@ -301,6 +301,24 @@ assert.strictEqual(pickPrompt('Gone', 'Laravel', saved), 'Laravel')
 assert.strictEqual(pickPrompt('Gone', 'Also gone', saved), 'Default')
 // Nothing saved at all, so the caller falls back to SKILL.md.
 assert.strictEqual(pickPrompt('Frontend', 'Laravel', []), null)
+
+// --- which commit a review is pinned to -----------------------------------
+
+const oids = ['a1b2c3d4e5f60718293a4b5c6d7e8f9012345678', 'a1b2c3daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'ffee0099887766554433221100aabbccddeeff00']
+
+// The full sha, and a prefix long enough to name one commit.
+assert.strictEqual(pickCommit(oids[0], oids), oids[0])
+assert.strictEqual(pickCommit('a1b2c3d4', oids), oids[0])
+assert.strictEqual(pickCommit('  FFEE009  ', oids), oids[2])
+// Two commits start the same way, so the prefix names neither.
+assert.strictEqual(pickCommit('a1b2c3d', oids), null)
+// Short prefixes collide, so they are refused before they are matched.
+assert.strictEqual(pickCommit('a1b2c', oids), null)
+// A sha from another repo, and anything that is not a sha at all.
+assert.strictEqual(pickCommit('0123456789abcdef0123456789abcdef01234567', oids), null)
+assert.strictEqual(pickCommit('HEAD~1', oids), null)
+assert.strictEqual(pickCommit('', oids), null)
+assert.strictEqual(pickCommit(null, oids), null)
 
 console.log('prompt ok')
 

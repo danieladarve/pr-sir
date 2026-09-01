@@ -75,6 +75,14 @@ export type OpenPr = {
   queued: boolean
 }
 
+/** One commit on a PR, as GitHub lists them, oldest first. */
+export type PrCommit = {
+  sha: string
+  subject: string
+  author: string
+  date: number | null
+}
+
 export type Finding = {
   path: string
   line: number
@@ -110,6 +118,8 @@ export type Review = {
   effort?: string | null
   /** The saved prompt this review actually ran on. */
   prompt?: string | null
+  /** The one commit this review reads. Null means the whole PR. */
+  commit_sha?: string | null
   tokens?: number | null
   /** Set when staging found a card for this PR already open. */
   existing?: boolean
@@ -210,6 +220,14 @@ export const api = {
       body: JSON.stringify({ model, effort, prompt }),
     }).then(json),
   diff: (id: string): Promise<string> => fetch(`/api/reviews/${id}/diff`).then(text),
+  commits: (id: string): Promise<PrCommit[]> => fetch(`/api/reviews/${id}/commits`).then(json),
+  /** An empty sha puts the review back to the whole PR. */
+  setCommit: (id: string, commit: string): Promise<Review> =>
+    fetch(`/api/reviews/${id}/commit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ commit }),
+    }).then(json),
   comment: (id: string, path: string, line: number, body: string): Promise<Review> =>
     fetch(`/api/reviews/${id}/comments`, {
       method: 'POST',

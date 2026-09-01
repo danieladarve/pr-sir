@@ -23,6 +23,10 @@ Pick a repo, type a PR number, hit enter. The PR is pulled in and parked. Nothin
 The card shows who opened it and when. Open the changes and you get the diff, where any line that
 exists in the new file takes an inline comment of your own. Write as many as you like, or none.
 
+A card reads the whole PR unless you narrow it. Scope opens the PR's commits, where you can search
+by hash, message or author and pin the review to one of them. The diff, your comments and the agent
+all follow that choice, and it can only move while the card is still staged.
+
 Then hit Start AI review. It runs as a `claude` process and streams what it and its subagents are
 doing. Queue as many as you like, they run at the same time. Reviews read the PR through `gh`, so
 nothing is checked out and two reviews of the same repo do not collide.

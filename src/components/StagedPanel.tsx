@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { api, parseComments, type Option, type Review, type Session } from '@/lib/api'
+import { CommitDialog } from '@/components/CommitDialog'
 import { DEFAULT, OptionPicker } from '@/components/OptionPicker'
 import { PromptDialog } from '@/components/PromptDialog'
 import { Button } from '@/components/ui/button'
@@ -21,6 +22,8 @@ export function StagedPanel({
   const [effort, setEffort] = useState('medium')
   const [prompt, setPrompt] = useState('Default')
   const [picking, setPicking] = useState(false)
+  const [scoping, setScoping] = useState(false)
+  const commit = session.commit_sha ?? ''
   const comments = parseComments(session)
 
   useEffect(() => {
@@ -61,6 +64,23 @@ export function StagedPanel({
       <Button variant="ghost" onClick={() => setPicking(true)} disabled={busy}>
         Prompt: {prompt}
       </Button>
+      <Button variant="ghost" onClick={() => setScoping(true)} disabled={busy}>
+        Scope: {commit ? commit.slice(0, 7) : 'whole PR'}
+      </Button>
+      {scoping && (
+        <CommitDialog
+          id={session.id}
+          pr={session.pr}
+          value={commit}
+          onClose={() => setScoping(false)}
+          onPick={(sha) =>
+            api
+              .setCommit(session.id, sha)
+              .then(onUpdate)
+              .catch((e) => toast.error(String((e as Error).message)))
+          }
+        />
+      )}
       {picking && (
         <PromptDialog
           onClose={() => setPicking(false)}

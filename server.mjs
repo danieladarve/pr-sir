@@ -9,8 +9,8 @@ import { promisify } from 'node:util'
 import { addTokens, summarise } from './metrics.mjs'
 import { ndjson } from './ndjson.mjs'
 import { isOutdated } from './version.mjs'
-import { reviewPayload } from './payload.mjs'
-import { pickPrompt } from './prompt.mjs'
+import { ownerRepo, reviewPayload } from './payload.mjs'
+import { pickCommit, pickPrompt } from './prompt.mjs'
 import { reviewResult } from './result.mjs'
 
 const run = promisify(execFile)
@@ -68,17 +68,32 @@ const CODE_REVIEW_NOTE = `Runs Claude Code's own /code-review on the PR, with no
 
 Nothing here to edit. The findings come back in the same shape either way, because the schema is what holds them to it, not the prompt.
 
-Needs a claude that has /code-review. An older one will read the line as plain text and review something else.`
+Needs a claude that has /code-review. An older one will read the line as plain text and review something else.
+
+/code-review takes a PR, not a commit. A review pinned to one commit still asks for it in words, so this prompt holds to it less tightly than the others.`
 
 // SKILL.md is the starting point, not the last word: a saved prompt wins, and a
 // review left with none falls back to the file again.
-const prompt = (pr, name) => {
+const prompt = (pr, name, scope = '') => {
   if (name === CODE_REVIEW) {
-    return `/code-review ${pr}\n\nReport the findings as the JSON in the schema rather than as text.`
+    return `/code-review ${pr}\n\nReport the findings as the JSON in the schema rather than as text.${scope}`
   }
   const md = (name && promptBody(name)) ?? skillPrompt()
-  return `${md}\n\nReview PR ${pr} now. Return the JSON from section 6 and nothing else.`
+  return `${md}\n\nReview PR ${pr} now. Return the JSON from section 6 and nothing else.${scope}`
 }
+
+// What pins a review to one commit. Read from GitHub rather than the clone,
+// because nothing is checked out for a review and the branch may never have
+// been fetched.
+const commitDiffCmd = (row) => {
+  const { owner, repo } = ownerRepo(row.url)
+  return `gh api repos/${owner}/${repo}/commits/${row.commit_sha} -H 'Accept: application/vnd.github.v3.diff'`
+}
+
+const scopeNote = (row) =>
+  row.commit_sha
+    ? `\n\nReview only commit ${row.commit_sha} of PR ${row.pr}. Read it with \`${commitDiffCmd(row)}\` rather than gh pr diff. What the rest of the PR changed is context, not your scope, so do not report on it.`
+    : ''
 
 // The picked model becomes a spawn argument. Anything not on this list is
 // refused, so a crafted value cannot smuggle in another flag.
@@ -161,6 +176,7 @@ for (const col of [
   'finished_at integer',
   'tokens integer',
   'prompt text',
+  'commit_sha text',
 ]) {
   try {
     db.exec(`alter table reviews add column ${col}`)
@@ -376,6 +392,19 @@ async function openPrs(repoName) {
   }))
 }
 
+/** The commits on a PR, oldest first, as GitHub lists them. */
+async function prCommits(row) {
+  const repo = getRepo(row.repo)
+  if (!repo) throw Object.assign(new Error(`${row.repo} is no longer in your repos`), { status: 400 })
+  const { stdout } = await run('gh', ['pr', 'view', String(row.pr), '--json', 'commits'], { cwd: repo.path })
+  return JSON.parse(stdout).commits.map((c) => ({
+    sha: c.oid,
+    subject: c.messageHeadline,
+    author: c.authors?.[0]?.login || c.authors?.[0]?.name || 'unknown',
+    date: Date.parse(c.committedDate) || null,
+  }))
+}
+
 /** Pulls the PR in and parks it. Nothing is spawned until the user says go. */
 async function stageReview(repoName, pr) {
   const repo = getRepo(repoName)
@@ -444,7 +473,7 @@ async function startReview(id, model = '', effort = EFFORT_DEFAULT, picked = '')
     'claude',
     [
       '-p',
-      prompt(row.pr, promptName),
+      prompt(row.pr, promptName, scopeNote(row)),
       '--output-format', 'stream-json',
       '--verbose',
       '--forward-subagent-text',
@@ -840,12 +869,44 @@ createServer(async (req, res) => {
       const repo = getRepo(row.repo)
       if (!repo) return json(res, 400, { error: `${row.repo} is no longer in your repos` })
       // A big PR produces a big diff, so give it room.
-      const { stdout } = await run('gh', ['pr', 'diff', String(row.pr)], {
-        cwd: repo.path,
-        maxBuffer: 32 * 1024 * 1024,
-      })
+      const opts = { cwd: repo.path, maxBuffer: 32 * 1024 * 1024 }
+      // A review pinned to one commit reads that commit, and reads it from
+      // GitHub: nothing is checked out here, so the clone may not have it.
+      const { owner, repo: name } = row.commit_sha ? ownerRepo(row.url) : {}
+      const { stdout } = row.commit_sha
+        ? await run(
+            'gh',
+            ['api', `repos/${owner}/${name}/commits/${row.commit_sha}`, '-H', 'Accept: application/vnd.github.v3.diff'],
+            opts,
+          )
+        : await run('gh', ['pr', 'diff', String(row.pr)], opts)
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
       return res.end(stdout)
+    }
+
+    if (req.method === 'GET' && seg[3] === 'commits') {
+      const row = get(seg[2])
+      if (!row) return json(res, 404, { error: 'unknown review' })
+      return json(res, 200, await prCommits(row))
+    }
+
+    // Which commit this review reads. An empty value puts it back to the whole
+    // PR. Only while it is staged: moving the scope under a running review
+    // would leave the log and the findings describing different things.
+    if (req.method === 'POST' && seg[3] === 'commit') {
+      const row = get(seg[2])
+      if (!row) return json(res, 404, { error: 'unknown review' })
+      if (row.status !== 'staged') return json(res, 409, { error: `already ${row.status}` })
+      const { commit } = await readBody(req)
+      const want = String(commit ?? '').trim()
+      let sha = null
+      if (want) {
+        sha = pickCommit(want, (await prCommits(row)).map((c) => c.sha))
+        if (!sha) return json(res, 400, { error: `${want} is not a commit on #${row.pr}` })
+      }
+      update(seg[2], { commit_sha: sha })
+      broadcast('review', { id: seg[2], review: get(seg[2]) })
+      return json(res, 200, get(seg[2]))
     }
 
     if (req.method === 'POST' && seg[3] === 'comments') {

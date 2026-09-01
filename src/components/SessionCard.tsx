@@ -83,6 +83,7 @@ export function SessionCard({
               {session.status === 'staged' ? ago(session.pr_created_at) : elapsed(session.created_at)}
               {session.model ? ` · ${session.model}` : ''}
               {session.effort ? ` · ${session.effort} effort` : ''}
+              {session.commit_sha ? ` · commit ${session.commit_sha.slice(0, 7)}` : ''}
               {tokens > 0 ? ` · ${formatTokens(tokens)} tokens` : ''}
             </p>
           </div>
