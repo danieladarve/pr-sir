@@ -1,8 +1,8 @@
 ---
 name: pr-sir
 description: >
-  Review a pull request for bugs and blockers only. Runs a ponytail pass and a correctness pass,
-  drops everything that is not a real bug, writes each comment in plain language through humanizer,
+  Review a pull request for bugs and blockers only. Runs one pass through caveman-review, drops
+  everything that is not a real bug, writes each comment in plain language through humanizer,
   and returns the findings as JSON. Posting is the caller's decision, this skill never posts.
   Use when the user says "review this PR", "review PR 123", "code review this", or invokes /pr-sir.
 ---
@@ -21,17 +21,17 @@ Check the file list first. On a large PR pull the diff a file at a time with
 
 The diff is the scope. Files the PR does not touch are not your business.
 
-## 2. Two passes
+## 2. One pass
 
-Run both with the `Skill` tool. Do not review inline instead, and do not skip the second one.
-If one is not installed the call fails, say so in the summary and carry on with the other.
+Run it with the `Skill` tool. Do not review inline instead. If it is not installed the call fails,
+say so in the summary and read the diff yourself.
 
-- `Skill(skill: "ponytail:ponytail-review")` on the diff.
-- `Skill(skill: "code-review", args: "<number>")` **without** `--comment`. This is the pass that
-  finds correctness bugs. `ponytail-review` says bugs are out of its scope, so it cannot be the
-  only pass.
+- `Skill(skill: "caveman:caveman-review")` on the diff.
 
-Everything they return is a candidate, not a finding. Section 4 decides what survives.
+That skill writes findings up, it does not go looking for them. Read the diff yourself as well and
+treat what you find the same as what it hands back.
+
+All of it is a candidate, not a finding. Section 4 decides what survives.
 
 ## 3. Explore with the graph, not grep
 
@@ -64,7 +64,8 @@ anyway.
 
 ## 5. Write the comments
 
-Run `humanizer` over every comment body.
+Run `humanizer` over every comment body. `caveman-review` returns one-liners like
+`L42: bug: ...`. Rewrite each one into the sentences below before it goes in the JSON.
 
 - two or three short sentences
 - everyday words, no jargon where a plain word works

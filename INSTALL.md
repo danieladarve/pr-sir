@@ -43,18 +43,16 @@ These make reviews better. Without them the app still runs and tells you what it
 under that name. If it is missing, the server prints `not installed, skipping: codebase-memory-mcp`
 at boot and reviews fall back to `Read` and `grep`.
 
-**The ponytail plugin**, for the over-engineering pass:
+**The caveman plugin**, for the review pass:
 
 ```
-claude plugin marketplace add DietrichGebert/ponytail
-claude plugin install ponytail
+claude plugin marketplace add JuliusBrussee/caveman
+claude plugin install caveman
 ```
 
 **A `humanizer` skill** in `~/.claude/skills/humanizer`, for the writing pass. Without it, comments
 follow the style rules in section 5 of the review skill, which is most of the value anyway. Drop a
 copy into this project's `.claude/skills` instead if you would rather it travelled with the repo.
-
-`code-review`, the pass that finds bugs, ships with Claude Code. Nothing to install.
 
 ## Project skills
 
@@ -106,8 +104,8 @@ before the agent read a line of code. Pinned to one server it is about 27,000 to
 If a review genuinely needs another MCP server, add it to `pr-sir.mcp.json` rather than to your
 global config.
 
-Two real reviews measured $5.31 over 31 minutes and $9.31 over 21 minutes. Both ran two passes and
-both spawned subagents. Cutting the ponytail pass from section 2 of the skill roughly halves it.
+Two real reviews measured $5.31 over 31 minutes and $9.31 over 21 minutes. Both of those ran two
+passes and both spawned subagents. The skill now runs a single pass, so expect roughly half.
 
 ## What it can do to your machine
 
