@@ -84,10 +84,10 @@ export function SessionCard({
               {session.model ? ` · ${session.model}` : ''}
               {session.effort ? ` · ${session.effort} effort` : ''}
               {session.commit_sha ? ` · commit ${session.commit_sha.slice(0, 7)}` : ''}
-              {tokens > 0 ? ` · ${formatTokens(tokens)} tokens` : ''}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {tokens > 0 && <Badge variant="outline">{formatTokens(tokens)} tokens</Badge>}
             <Badge variant={badge[session.status]} className="gap-1.5">
               <StatusIcon status={session.status} />
               {session.status}

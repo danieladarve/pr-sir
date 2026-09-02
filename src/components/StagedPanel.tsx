@@ -64,7 +64,7 @@ export function StagedPanel({
       <Button variant="ghost" onClick={() => setPicking(true)} disabled={busy}>
         Prompt: {prompt}
       </Button>
-      <Button variant="ghost" onClick={() => setScoping(true)} disabled={busy}>
+      <Button variant="outline" onClick={() => setScoping(true)} disabled={busy}>
         Scope: {commit ? commit.slice(0, 7) : 'whole PR'}
       </Button>
       {scoping && (
