@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { toast } from 'sonner'
 import { api, type Option, type Repo } from '@/lib/api'
 import { Satellite } from '@/components/icons'
@@ -6,17 +6,17 @@ import { OptionPicker } from '@/components/OptionPicker'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
-export function Repos({ repos, onChange }: { repos: Repo[]; onChange: () => void }) {
+export function Repos({
+  repos,
+  prompts,
+  onChange,
+}: {
+  repos: Repo[]
+  prompts: Option[]
+  onChange: () => void
+}) {
   const [dir, setDir] = useState('')
   const [busy, setBusy] = useState(false)
-  const [prompts, setPrompts] = useState<Option[]>([])
-
-  useEffect(() => {
-    api
-      .prompts()
-      .then((ps) => setPrompts(ps.map((p) => ({ id: p.name, name: p.name, note: '' }))))
-      .catch(() => setPrompts([]))
-  }, [])
 
   const setPrompt = async (repo: string, name: string) => {
     try {
@@ -62,11 +62,6 @@ export function Repos({ repos, onChange }: { repos: Repo[]; onChange: () => void
           Add
         </Button>
       </form>
-      <p className="text-sm text-muted-foreground">
-        Paste the path to a local clone. It needs a GitHub remote you can reach, and it is checked
-        before it is saved.
-      </p>
-
       <div className="divide-y rounded-md border">
         {repos.length === 0 && (
           <div className="flex flex-col items-center gap-3 p-8 text-muted-foreground">

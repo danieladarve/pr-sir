@@ -176,8 +176,6 @@ export const api = {
   skillPrompt: (): Promise<{ body: string }> => fetch('/api/skill-prompt').then(json),
   // Not cached the way the models are: these change while the app is open.
   prompts: (): Promise<Prompt[]> => fetch('/api/prompts').then(json),
-  /** Only the ones you can edit, so the built-ins stay out of the editor. */
-  saved: (): Promise<Prompt[]> => api.prompts().then((ps) => ps.filter((p) => !p.builtin)),
   savePrompt: (name: string, body: string, rename?: string): Promise<Prompt[]> =>
     fetch('/api/prompts', {
       method: 'POST',

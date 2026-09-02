@@ -8,7 +8,6 @@ import { Alien, AlienChart, FlyingSaucer, SettingsScreen } from '@/components/ic
 import { Analytics } from '@/components/Analytics'
 import { OpenPrs } from '@/components/OpenPrs'
 import { Preferences } from '@/components/Preferences'
-import { Repos } from '@/components/Repos'
 import { Toaster } from '@/components/ui/sonner'
 import { SessionCard } from '@/components/SessionCard'
 import { Button } from '@/components/ui/button'
@@ -189,7 +188,7 @@ export default function App() {
             Back
           </Button>
         </header>
-        <Preferences onSaved={() => setSettingsAt(Date.now())} />
+        <Preferences repos={repos} onChange={refreshRepos} onSaved={() => setSettingsAt(Date.now())} />
         <Toaster />
       </div>
     )
@@ -269,7 +268,6 @@ export default function App() {
             <TabsTrigger value="active">Active {shownActive.length > 0 && `(${shownActive.length})`}</TabsTrigger>
             {openPrsTab && <TabsTrigger value="open">Open PRs</TabsTrigger>}
             <TabsTrigger value="archive">Archive</TabsTrigger>
-            <TabsTrigger value="repos">Repos {repos.length > 0 && `(${repos.length})`}</TabsTrigger>
           </TabsList>
           <Input
             value={filter}
@@ -301,10 +299,6 @@ export default function App() {
 
         <TabsContent value="archive" className="pt-4">
           <Archive reviews={shownArchive} filter={filter} />
-        </TabsContent>
-
-        <TabsContent value="repos" className="pt-4">
-          <Repos repos={repos} onChange={refreshRepos} />
         </TabsContent>
       </Tabs>
 

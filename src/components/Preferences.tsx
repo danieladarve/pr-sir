@@ -2,16 +2,32 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { api, type Option, type Prompt, type Repo } from '@/lib/api'
 import { DEFAULT, OptionPicker } from '@/components/OptionPicker'
+import { Repos } from '@/components/Repos'
 import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 
 const asOptions = (prompts: Prompt[]): Option[] => prompts.map((p) => ({ id: p.name, name: p.name, note: '' }))
 
-export function Preferences({ onSaved }: { onSaved: () => void }) {
+export function Preferences({
+  repos,
+  onChange,
+  onSaved,
+}: {
+  repos: Repo[]
+  onChange: () => void
+  onSaved: () => void
+}) {
   const [models, setModels] = useState<Option[]>([])
   const [efforts, setEfforts] = useState<Option[]>([])
   const [prompts, setPrompts] = useState<Prompt[]>([])
-  const [repos, setRepos] = useState<Repo[]>([])
   const [picked, setPicked] = useState('Default')
   const [body, setBody] = useState('')
   const [model, setModel] = useState(DEFAULT)
@@ -21,14 +37,15 @@ export function Preferences({ onSaved }: { onSaved: () => void }) {
   // Saving before the fetch lands would write the empty box over the prompt.
   const [loaded, setLoaded] = useState(false)
 
+  // The built-in is offered to repos but never opened in the editor.
+  const editable = prompts.filter((p) => !p.builtin)
   const saved = prompts.find((p) => p.name === picked)?.body ?? ''
   const dirty = loaded && body !== saved
 
   useEffect(() => {
     api.models().then(setModels).catch(() => setModels([]))
     api.efforts().then(setEfforts).catch(() => setEfforts([]))
-    api.repos().then(setRepos).catch(() => setRepos([]))
-    Promise.all([api.settings(), api.saved()])
+    Promise.all([api.settings(), api.prompts()])
       .then(([s, ps]) => {
         setModel(s.model || DEFAULT)
         setEffort(s.effort)
@@ -50,7 +67,7 @@ export function Preferences({ onSaved }: { onSaved: () => void }) {
   }
 
   const load = async (name: string) => {
-    const ps = await api.saved()
+    const ps = await api.prompts()
     setPrompts(ps)
     setPicked(name)
     setBody(ps.find((p) => p.name === name)?.body ?? '')
@@ -87,9 +104,9 @@ export function Preferences({ onSaved }: { onSaved: () => void }) {
     if (!confirm(`Delete ${picked}? Repos using it fall back to Default.`)) return
     setBusy(true)
     try {
-      const left = (await api.deletePrompt(picked)).filter((p) => !p.builtin)
+      const left = await api.deletePrompt(picked)
       setPrompts(left)
-      setRepos(await api.repos())
+      onChange()
       // Set straight, not through switchTo: the deleted body always looks unsaved.
       setPicked('Default')
       setBody(left.find((p) => p.name === 'Default')?.body ?? '')
@@ -110,15 +127,6 @@ export function Preferences({ onSaved }: { onSaved: () => void }) {
     }
   }
 
-  const toggleRepo = async (repo: string, on: boolean) => {
-    try {
-      const updated = await api.setRepoPrompt(repo, on ? picked : '')
-      setRepos((rs) => rs.map((r) => (r.name === repo ? updated : r)))
-    } catch (err) {
-      fail(err)
-    }
-  }
-
   const saveSettings = async () => {
     setBusy(true)
     try {
@@ -134,91 +142,94 @@ export function Preferences({ onSaved }: { onSaved: () => void }) {
 
   return (
     <div className="space-y-4">
-      <div className="space-y-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <label htmlFor="prompt" className="text-sm font-medium">
-            System prompts
-          </label>
-          <OptionPicker
-            label="Prompt"
-            options={asOptions(prompts)}
-            value={picked}
-            onChange={switchTo}
-            disabled={busy || !loaded}
-          />
-          <Button variant="ghost" size="sm" onClick={create} disabled={busy || !loaded}>
-            New
-          </Button>
-          <Button variant="ghost" size="sm" onClick={rename} disabled={busy || !loaded || picked === 'Default'}>
-            Rename
-          </Button>
-          <Button variant="ghost" size="sm" onClick={remove} disabled={busy || !loaded || picked === 'Default'}>
-            Delete
-          </Button>
-        </div>
-        <textarea
-          id="prompt"
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          spellCheck={false}
-          className="h-96 w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 font-mono text-xs transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
-        />
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="text-sm text-muted-foreground">
+      <Card className="bg-transparent">
+        <CardHeader>
+          <CardTitle>System prompts</CardTitle>
+          <CardDescription>
             A review runs on the prompt its repo asks for, and Default covers the rest. New starts
             from whatever is in the box, so it is the way to copy one and tweak it.
-          </p>
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <OptionPicker
+              label="Prompt"
+              options={asOptions(editable)}
+              value={picked}
+              onChange={switchTo}
+              disabled={busy || !loaded}
+            />
+            <Button variant="ghost" size="sm" onClick={create} disabled={busy || !loaded}>
+              New
+            </Button>
+            <Button variant="ghost" size="sm" onClick={rename} disabled={busy || !loaded || picked === 'Default'}>
+              Rename
+            </Button>
+            <Button variant="ghost" size="sm" onClick={remove} disabled={busy || !loaded || picked === 'Default'}>
+              Delete
+            </Button>
+          </div>
+          <textarea
+            aria-label={`The ${picked} prompt`}
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            spellCheck={false}
+            className="h-96 w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 font-mono text-xs transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+          />
+        </CardContent>
+        <CardFooter className="gap-2">
+          <Button variant="outline" onClick={reset} disabled={busy || !loaded}>
+            Load the skill copy
+          </Button>
           <Button className="ml-auto" onClick={() => savePrompt()} disabled={busy || !loaded || !dirty}>
             Save the prompt
           </Button>
-          <Button variant="ghost" onClick={reset} disabled={busy || !loaded}>
-            Load the skill copy
+        </CardFooter>
+      </Card>
+
+      <Card className="bg-transparent">
+        <CardHeader>
+          <CardTitle>Defaults</CardTitle>
+          <CardDescription>What a review runs on unless its repo says otherwise.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <label className="flex items-start gap-3">
+            <Checkbox checked={openPrs} onCheckedChange={(v) => setOpenPrs(v === true)} disabled={busy || !loaded} />
+            <span className="space-y-1">
+              <span className="block text-sm font-medium">Show the repo's open PRs</span>
+              <span className="block text-sm text-muted-foreground">
+                Adds a tab listing everything open on the selected repo, so you can queue a review
+                without typing the number.
+              </span>
+            </span>
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <OptionPicker label="Model" options={models} value={model} onChange={setModel} disabled={busy} />
+            <OptionPicker label="Effort" options={efforts} value={effort} onChange={setEffort} disabled={busy} />
+            <span className="text-sm text-muted-foreground">
+              {models.find((m) => (m.id || DEFAULT) === model)?.note}
+            </span>
+          </div>
+        </CardContent>
+        <CardFooter>
+          <Button className="ml-auto" onClick={saveSettings} disabled={busy || !loaded}>
+            Save
           </Button>
-        </div>
-      </div>
+        </CardFooter>
+      </Card>
 
-      <div className="space-y-2">
-        <span className="text-sm font-medium">Repos that use {picked}</span>
-        <div className="flex flex-wrap gap-x-4 gap-y-2">
-          {repos.length === 0 && <span className="text-sm text-muted-foreground">No repos yet.</span>}
-          {repos.map((r) => (
-            <label key={r.name} className="flex items-center gap-2">
-              <Checkbox
-                checked={(r.prompt || 'Default') === picked}
-                onCheckedChange={(v) => toggleRepo(r.name, v === true)}
-                disabled={busy || !loaded}
-              />
-              <span className="text-sm">{r.name}</span>
-            </label>
-          ))}
-        </div>
-        <p className="text-sm text-muted-foreground">
-          Unticking sends the repo back to Default. The same list sits on each repo in the picker
-          below, whichever way round you prefer.
-        </p>
-      </div>
-
-      <label className="flex items-start gap-3">
-        <Checkbox checked={openPrs} onCheckedChange={(v) => setOpenPrs(v === true)} disabled={busy || !loaded} />
-        <span className="space-y-1">
-          <span className="block text-sm font-medium">Show the repo's open PRs</span>
-          <span className="block text-sm text-muted-foreground">
-            Adds a tab listing everything open on the selected repo, so you can queue a review
-            without typing the number.
-          </span>
-        </span>
-      </label>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <OptionPicker label="Model" options={models} value={model} onChange={setModel} disabled={busy} />
-        <OptionPicker label="Effort" options={efforts} value={effort} onChange={setEffort} disabled={busy} />
-        <span className="text-sm text-muted-foreground">
-          {models.find((m) => (m.id || DEFAULT) === model)?.note}
-        </span>
-        <Button className="ml-auto" onClick={saveSettings} disabled={busy || !loaded}>
-          Save
-        </Button>
-      </div>
+      <Card className="bg-transparent">
+        <CardHeader>
+          <CardTitle>Repos</CardTitle>
+          <CardDescription>
+            Paste the path to a local clone. It needs a GitHub remote you can reach, and it is
+            checked before it is saved.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Repos repos={repos} prompts={asOptions(prompts)} onChange={onChange} />
+        </CardContent>
+      </Card>
     </div>
   )
 }
