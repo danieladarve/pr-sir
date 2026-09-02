@@ -324,7 +324,7 @@ console.log('prompt ok')
 
 // --- what the log shows while a subagent does the work --------------------
 
-import { toLines } from './src/lib/api.ts'
+import { narrate, toLines } from './src/lib/api.ts'
 
 // A review that works through subagents reports only through these, so dropping
 // them left the log on "waiting for the agent" for minutes at a time.
@@ -356,7 +356,55 @@ assert.deepStrictEqual(
   [{ text: 'rate limit seven_day at 80%', tone: 'meta', depth: 0 }],
 )
 
-console.log('log lines ok')
+console.log('raw log lines ok')
+
+// --- the same stream, told in words ---------------------------------------
+
+const used = (name, input) => narrate({ type: 'assistant', message: { content: [{ type: 'tool_use', name, input }] } })
+
+assert.deepStrictEqual(used('Read', { file_path: '/repo/src/Cart.php' }), [
+  { text: 'read Cart.php', tone: 'tool', depth: 0 },
+])
+assert.deepStrictEqual(used('Bash', { command: 'gh pr diff 5990' }), [
+  { text: 'ran gh pr diff 5990', tone: 'tool', depth: 0 },
+])
+assert.deepStrictEqual(used('Skill', { skill: 'caveman:caveman-review' }), [
+  { text: 'ran the caveman:caveman-review skill', tone: 'tool', depth: 0 },
+])
+assert.deepStrictEqual(used('mcp__codebase-memory-mcp__trace_path', { function_name: 'applyDiscount' }), [
+  { text: 'traced callers of applyDiscount', tone: 'tool', depth: 0 },
+])
+// A tool nobody has taught this about still shows, without its underscores.
+assert.deepStrictEqual(used('mcp__thing__do_something', { query: 'vouchers' }), [
+  { text: 'do something vouchers', tone: 'tool', depth: 0 },
+])
+// The agent's own bookkeeping says nothing about the review.
+assert.deepStrictEqual(used('TodoWrite', { todos: [] }), [])
+
+// What the agent says out loud goes through whole.
+assert.deepStrictEqual(narrate({ type: 'assistant', message: { content: [{ type: 'text', text: 'The voucher check runs late.' }] } }), [
+  { text: 'The voucher check runs late.', tone: 'text', depth: 0 },
+])
+
+// A subagent's work stays indented, the way the raw view does it.
+assert.deepStrictEqual(
+  narrate({
+    type: 'assistant',
+    parent_tool_use_id: 'toolu_1',
+    message: { content: [{ type: 'tool_use', name: 'Grep', input: { pattern: 'applyDiscount' } }] },
+  }),
+  [{ text: 'searched for applyDiscount', tone: 'tool', depth: 1 }],
+)
+
+// The CLI's own chatter goes. The raw view still has it.
+assert.deepStrictEqual(narrate({ type: 'system', subtype: 'compact_boundary' }), [])
+assert.deepStrictEqual(narrate({ type: 'system', subtype: 'hook_response', output: 'x' }), [])
+assert.deepStrictEqual(narrate({ type: 'system', subtype: 'init' }), [
+  { text: 'session started', tone: 'meta', depth: 0 },
+])
+assert.deepStrictEqual(narrate({ type: 'result' }), [{ text: 'review finished', tone: 'meta', depth: 0 }])
+
+console.log('plain log lines ok')
 
 // --- what a finished run leaves on the card --------------------------------
 

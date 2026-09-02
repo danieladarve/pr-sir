@@ -271,7 +271,8 @@ export const parseComments = (r: Review) => parseList<Comment>(r.comments)
 /** One display line, or null for events with nothing worth showing. */
 export type Line = { text: string; tone: 'text' | 'tool' | 'meta'; depth: number }
 
-const toolLine = (name: string, input: Record<string, unknown>): string => {
+/** The one argument worth showing out of whatever a tool was called with. */
+const toolArg = (input: Record<string, unknown>, limit = 120): string => {
   const first =
     (input.skill as string) ??
     (input.command as string) ??
@@ -279,9 +280,16 @@ const toolLine = (name: string, input: Record<string, unknown>): string => {
     (input.description as string) ??
     (input.pattern as string) ??
     (input.qualified_name as string) ??
+    (input.function_name as string) ??
+    (input.query as string) ??
+    (input.url as string) ??
     (input.prompt as string) ??
     ''
-  const arg = String(first).split('\n')[0].slice(0, 120)
+  return String(first).split('\n')[0].slice(0, limit)
+}
+
+const toolLine = (name: string, input: Record<string, unknown>): string => {
+  const arg = toolArg(input)
   return arg ? `${name}  ${arg}` : name
 }
 
@@ -338,5 +346,87 @@ export function toLines(e: StreamEvent): Line[] {
     return [{ text: e.subtype.replace(/_/g, ' '), tone: 'meta', depth }]
   }
 
+  return []
+}
+
+/** What one tool call reads as in the plain log. Empty means show nothing. */
+const narrateTool = (name: string, input: Record<string, unknown>): string => {
+  const arg = toolArg(input, 100)
+  const file = arg.split('/').pop() ?? arg
+
+  switch (name) {
+    case 'Bash':
+      return `ran ${arg}`
+    case 'Read':
+      return `read ${file}`
+    case 'Grep':
+      return `searched for ${arg}`
+    case 'Glob':
+      return `looked for ${arg}`
+    case 'Skill':
+      return `ran the ${arg} skill`
+    case 'Task':
+      return `started a subagent: ${arg}`
+    case 'WebFetch':
+    case 'WebSearch':
+      return `looked up ${arg}`
+    // Bookkeeping the agent does for itself, which says nothing about the review.
+    case 'TodoWrite':
+      return ''
+  }
+
+  // An MCP tool arrives as mcp__<server>__<call>. The server name says nothing
+  // to a reader, and the three graph calls the skill names get real sentences.
+  const mcp = name.match(/^mcp__.*?__(.+)$/)?.[1]
+  if (mcp === 'search_graph') return `searched the code graph for ${arg}`
+  if (mcp === 'trace_path') return `traced callers of ${arg}`
+  if (mcp === 'get_code_snippet') return `read ${arg} from the code graph`
+  if (mcp === 'check_index_coverage') return `checked the code graph covers ${file}`
+
+  const plain = (mcp ?? name).replace(/_/g, ' ').toLowerCase()
+  return arg ? `${plain} ${arg}` : plain
+}
+
+/**
+ * The same stream as toLines, told in words. Tool names and paths become
+ * sentences and the CLI's own chatter goes, so the box reads like a report of
+ * what the review is doing rather than a transcript of how.
+ */
+export function narrate(e: StreamEvent): Line[] {
+  const depth = e.parent_tool_use_id ? 1 : 0
+
+  if (e.type === 'system' && e.subtype === 'init') return [{ text: 'session started', tone: 'meta', depth }]
+
+  if (e.type === 'system' && e.subtype === 'task_started') {
+    return [{ text: `started a subagent: ${e.description ?? ''}`.trim(), tone: 'tool', depth: 1 }]
+  }
+
+  if (e.type === 'system' && e.subtype === 'task_notification') {
+    return [{ text: `subagent ${e.status ?? 'update'}: ${e.summary ?? ''}`.trim(), tone: 'meta', depth: 1 }]
+  }
+
+  // Worth keeping: a review that has stopped because of one looks stuck.
+  if (e.type === 'rate_limit_event' && e.rate_limit_info?.status !== 'allowed') {
+    const pct = Math.round((e.rate_limit_info?.utilization ?? 0) * 100)
+    return [{ text: `rate limit ${e.rate_limit_info?.rateLimitType ?? ''} at ${pct}%`, tone: 'meta', depth: 0 }]
+  }
+
+  if (e.type === 'assistant') {
+    const out: Line[] = []
+    for (const block of e.message?.content ?? []) {
+      if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
+        out.push({ text: block.text.trim(), tone: 'text', depth })
+      }
+      if (block.type === 'tool_use') {
+        const text = narrateTool(String(block.name), (block.input ?? {}) as Record<string, unknown>)
+        if (text) out.push({ text, tone: 'tool', depth })
+      }
+    }
+    return out
+  }
+
+  if (e.type === 'result') return [{ text: 'review finished', tone: 'meta', depth: 0 }]
+
+  // Every other subtype is the CLI talking to itself. The raw view still has it.
   return []
 }
