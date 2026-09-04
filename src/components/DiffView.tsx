@@ -86,13 +86,15 @@ export function DiffView({
 
   return (
     <div className="space-y-2">
-    <Input
-      value={query}
-      onChange={(e) => find(e.target.value)}
-      placeholder="Find a file"
-      aria-label="Find a file in the changes"
-      className="h-7 font-mono text-xs"
-    />
+    {/* Same ground as the page so the input's translucent dark fill matches the filter box. */}
+    <div className="rounded-lg bg-background">
+      <Input
+        value={query}
+        onChange={(e) => find(e.target.value)}
+        placeholder="Find a file"
+        aria-label="Find a file in the changes"
+      />
+    </div>
     <div ref={box} className="relative max-h-[32rem] overflow-auto rounded-md border border-downy-800 bg-downy-950 font-mono text-xs">
       {files.map((file) => {
         const shut = collapsed.has(file.path)
