@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { api, parseComments, type Review, type Session } from '@/lib/api'
 import { DiffView } from '@/components/DiffView'
@@ -8,19 +8,24 @@ import { Button } from '@/components/ui/button'
  *  so a review in flight does not take the changes away. */
 export function Changes({ session, onUpdate }: { session: Session; onUpdate: (r: Review) => void }) {
   const [diff, setDiff] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const comments = parseComments(session)
 
-  const toggle = async () => {
+  const load = () =>
+    api
+      .diff(session.id)
+      .then(setDiff, (err: Error) => toast.error(String(err.message)))
+      .finally(() => setLoading(false))
+
+  // Open by default: the changes are what the card is about.
+  useEffect(() => {
+    void load()
+  }, [session.id]) // eslint-disable-line react-hooks/exhaustive-deps -- load only reads session.id
+
+  const toggle = () => {
     if (diff !== null) return setDiff(null) // an empty diff is still loaded
     setLoading(true)
-    try {
-      setDiff(await api.diff(session.id))
-    } catch (err) {
-      toast.error(String((err as Error).message))
-    } finally {
-      setLoading(false)
-    }
+    void load()
   }
 
   const addComment = async (path: string, line: number, body: string) => {

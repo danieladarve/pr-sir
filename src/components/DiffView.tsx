@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ChevronDownIcon } from 'lucide-react'
 import { parseDiff, type DiffLine } from '@/lib/diff'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
 const bg: Record<DiffLine['kind'], string> = {
@@ -27,6 +28,31 @@ export function DiffView({
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+  const [query, setQuery] = useState('')
+  // The file the search just landed on, lit up for a moment so the eye finds it.
+  const [hit, setHit] = useState<string | null>(null)
+  const hitTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+
+  const find = (q: string) => {
+    setQuery(q)
+    const needle = q.trim().toLowerCase()
+    const file = needle ? files.find((f) => f.path.toLowerCase().includes(needle)) : undefined
+    if (!file) return
+    setCollapsed((c) => {
+      if (!c.has(file.path)) return c
+      const next = new Set(c)
+      next.delete(file.path)
+      return next
+    })
+    // Scroll the diff box itself. scrollIntoView walks every ancestor and moves
+    // the page too.
+    const el = box.current?.querySelector<HTMLElement>(`[data-path="${CSS.escape(file.path)}"]`)
+    if (el) box.current!.scrollTo({ top: el.offsetTop, behavior: 'smooth' })
+    setHit(file.path)
+    clearTimeout(hitTimer.current)
+    hitTimer.current = setTimeout(() => setHit(null), 1500)
+  }
 
   const toggleFile = (path: string) =>
     setCollapsed((c) => {
@@ -59,18 +85,29 @@ export function DiffView({
   if (files.length === 0) return <p className="text-sm text-muted-foreground">No changes to show.</p>
 
   return (
-    <div className="max-h-[32rem] overflow-auto rounded-md border border-downy-800 bg-downy-950 font-mono text-xs">
+    <div className="space-y-2">
+    <Input
+      value={query}
+      onChange={(e) => find(e.target.value)}
+      placeholder="Find a file"
+      aria-label="Find a file in the changes"
+      className="h-7 font-mono text-xs"
+    />
+    <div ref={box} className="relative max-h-[32rem] overflow-auto rounded-md border border-downy-800 bg-downy-950 font-mono text-xs">
       {files.map((file) => {
         const shut = collapsed.has(file.path)
         const adds = file.lines.filter((l) => l.kind === 'add').length
         const dels = file.lines.filter((l) => l.kind === 'del').length
         return (
-        <div key={file.path} className="border-b border-downy-800 last:border-0">
+        <div key={file.path} data-path={file.path} className="border-b border-downy-800 last:border-0">
           <button
             type="button"
             onClick={() => toggleFile(file.path)}
             aria-expanded={!shut}
-            className="sticky top-0 z-10 flex w-full items-center gap-2 bg-downy-900 px-3 py-2 text-left text-downy-100 hover:bg-downy-800"
+            className={cn(
+              'sticky top-0 z-10 flex w-full items-center gap-2 bg-downy-900 px-3 py-2 text-left text-downy-100 transition-colors hover:bg-downy-800',
+              hit === file.path && 'animate-pulse bg-downy-600 ring-2 ring-downy-300 ring-inset',
+            )}
           >
             <ChevronDownIcon className={cn('size-3.5 shrink-0 transition-transform', shut && '-rotate-90')} />
             <span className="truncate">{file.path}</span>
@@ -142,6 +179,7 @@ export function DiffView({
         </div>
         )
       })}
+    </div>
     </div>
   )
 }
