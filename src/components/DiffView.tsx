@@ -3,6 +3,7 @@ import { ChevronDownIcon } from 'lucide-react'
 import { parseDiff, type DiffLine } from '@/lib/diff'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
 const bg: Record<DiffLine['kind'], string> = {
@@ -84,6 +85,8 @@ export function DiffView({
 
   if (files.length === 0) return <p className="text-sm text-muted-foreground">No changes to show.</p>
 
+  const allShut = files.every((f) => collapsed.has(f.path))
+
   return (
     <div className="space-y-2">
     {/* Same ground as the page so the input's translucent dark fill matches the filter box. */}
@@ -95,7 +98,27 @@ export function DiffView({
         aria-label="Find a file in the changes"
       />
     </div>
-    <div ref={box} className="relative max-h-[32rem] overflow-auto rounded-md border border-downy-800 bg-downy-950 font-mono text-xs">
+    <div className="rounded-md border border-downy-800 bg-downy-950 font-mono text-xs">
+      {/* Outside the scroll box, so it never moves with the files. */}
+      <div className="flex rounded-md items-center gap-2 border-b border-downy-800 bg-downy-900 px-2 py-1.5 text-downy-100">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon-xs"
+              className="rounded-full border-downy-500 bg-downy-700 text-downy-50 hover:bg-downy-600 hover:text-downy-50 dark:border-downy-500 dark:bg-downy-700 dark:hover:bg-downy-600"
+              onClick={() => setCollapsed(allShut ? new Set() : new Set(files.map((f) => f.path)))}
+              aria-expanded={!allShut}
+              aria-label={allShut ? 'Expand all files' : 'Collapse all files'}
+            >
+              <ChevronDownIcon className={cn('transition-transform', allShut && '-rotate-90')} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{allShut ? 'Expand all files' : 'Collapse all files'}</TooltipContent>
+        </Tooltip>
+        <span className="font-bold select-none">Changed files</span>
+      </div>
+      <div ref={box} className="relative max-h-[32rem] overflow-auto">
       {files.map((file) => {
         const shut = collapsed.has(file.path)
         const adds = file.lines.filter((l) => l.kind === 'add').length
@@ -181,6 +204,7 @@ export function DiffView({
         </div>
         )
       })}
+      </div>
     </div>
     </div>
   )

@@ -136,6 +136,14 @@
   body {
     @apply bg-background text-foreground;
     }
+  /* Tailwind v4 resets buttons to cursor: default. Anything clickable points. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  a[href],
+  label[for],
+  summary {
+    cursor: pointer;
+    }
   html {
     @apply font-sans;
     }
